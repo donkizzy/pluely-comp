@@ -1,6 +1,8 @@
-import { getDatabase } from "./config";
-import { ChatConversation } from "@/types";
-import { safeLocalStorage } from "@/lib";
+import { getDatabase } from "./config.ts";
+import type { ChatConversation as BaseConversation } from "@/types";
+import { readActiveSessionId } from "../context/active-session.ts";
+type ChatConversation = BaseConversation & { sessionId?: string | null };
+import { safeLocalStorage } from "../storage/helper.ts";
 
 // Legacy localStorage key for migration purposes
 const LEGACY_CHAT_HISTORY_KEY = "chat_history";
@@ -13,6 +15,7 @@ interface DbConversation {
   title: string;
   created_at: number;
   updated_at: number;
+  session_id?: string | null;
 }
 
 /**
@@ -100,12 +103,13 @@ export async function createConversation(
   try {
     // Insert conversation
     await db.execute(
-      "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO conversations (id, title, created_at, updated_at, session_id) VALUES (?, ?, ?, ?, (SELECT id FROM interview_sessions WHERE id=?))",
       [
         conversation.id,
         conversation.title,
         conversation.createdAt || Date.now(),
         conversation.updatedAt || Date.now(),
+        conversation.sessionId === undefined ? readActiveSessionId() : conversation.sessionId,
       ]
     );
 
@@ -183,6 +187,7 @@ export async function getAllConversations(): Promise<ChatConversation[]> {
       title: conv.title,
       createdAt: conv.created_at,
       updatedAt: conv.updated_at,
+      sessionId: conv.session_id ?? null,
       messages:
         messagesByConversation.get(conv.id)?.map((msg) => ({
           id: msg.id,
@@ -235,6 +240,7 @@ export async function getConversationById(
       title: conv.title,
       createdAt: conv.created_at,
       updatedAt: conv.updated_at,
+      sessionId: conv.session_id ?? null,
       messages: messages.map((msg) => ({
         id: msg.id,
         role: msg.role,
@@ -378,6 +384,8 @@ export async function deleteConversation(id: string): Promise<boolean> {
       id,
     ]);
 
+    await db.execute("DELETE FROM chunks WHERE document_id=?", [`transcript:${id}`]);
+    await db.execute("DELETE FROM documents WHERE id=? AND kind='transcript'", [`transcript:${id}`]);
     return result.rowsAffected > 0;
   } catch (error) {
     console.error(`Failed to delete conversation ${id}:`, error);
@@ -395,6 +403,8 @@ export async function deleteAllConversations(): Promise<void> {
     // Delete in correct order (messages first due to foreign key)
     await db.execute("DELETE FROM messages");
     await db.execute("DELETE FROM conversations");
+    await db.execute("DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE kind='transcript')");
+    await db.execute("DELETE FROM documents WHERE kind='transcript'");
   } catch (error) {
     console.error("Failed to delete all conversations:", error);
     throw error;

@@ -6,6 +6,10 @@ import "./global.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import AppRoutes from "./routes";
 
+// --- track B: knowledge ---
+import { ProfileProvider } from "./contexts/profile.context";
+// --- end track B: knowledge ---
+
 const currentWindow = getCurrentWindow();
 const windowLabel = currentWindow.label;
 
@@ -23,7 +27,11 @@ if (windowLabel.startsWith("capture-overlay-")) {
     <React.StrictMode>
       <ThemeProvider>
         <AppProvider>
+          {/* // --- track B: knowledge --- */}
+          <ProfileProvider>
           <AppRoutes />
+          </ProfileProvider>
+          {/* // --- end track B: knowledge --- */}
         </AppProvider>
       </ThemeProvider>
     </React.StrictMode>
