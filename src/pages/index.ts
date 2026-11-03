@@ -9,3 +9,7 @@ export { default as Shortcuts } from "./shortcuts";
 export { default as Audio } from "./audio";
 export { default as Screenshot } from "./screenshot";
 export { default as Responses } from "./responses";
+
+// --- track B: knowledge ---
+export { default as ProfilePage } from "./profile";
+// --- end track B: knowledge ---

@@ -71,6 +71,12 @@ export const useMenuItems = () => {
     },
   ];
 
+  // --- track B: knowledge ---
+  menu.push(
+    { icon: HomeIcon, label: "Your profile", href: "/profile" },
+  );
+  // --- end track B: knowledge ---
+
   const footerItems = [
     {
       icon: BugIcon,
