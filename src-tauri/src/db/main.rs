@@ -17,5 +17,23 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/chat-history.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "knowledge_store",
+            sql: include_str!("migrations/knowledge.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "story_bank",
+            sql: include_str!("migrations/stories.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 5,
+            description: "interview_sessions",
+            sql: include_str!("migrations/sessions.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

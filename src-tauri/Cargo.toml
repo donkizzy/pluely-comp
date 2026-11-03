@@ -56,6 +56,11 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 silero-vad-crs = "0.4"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter"] }
 
+# --- track B: knowledge ---
+fastembed = { version = "=5.2.0", default-features = false, features = ["ort-download-binaries"] }
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+# --- end track B: knowledge ---
+
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-permissions = "2.3.0"
 cidre = "0.29.0"

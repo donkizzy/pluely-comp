@@ -88,6 +88,13 @@ pub fn run() {
     }
     let mut builder = builder
         .invoke_handler(tauri::generate_handler![
+            // --- track B: knowledge ---
+            kb::kb_save_document,
+            kb::kb_ingest,
+            kb::kb_search,
+            kb::kb_warm,
+            kb::kb_index_story,
+            // --- end track B: knowledge ---
             get_app_version,
             analytics::capture_analytics_event,
             window::set_window_height,
@@ -245,3 +252,7 @@ fn init(app_handle: &AppHandle) {
             | NSWindowCollectionBehavior::CanJoinAllSpaces,
     );
 }
+
+// --- track B: knowledge ---
+mod kb;
+// --- end track B: knowledge ---

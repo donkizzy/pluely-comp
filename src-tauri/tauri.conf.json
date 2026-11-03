@@ -73,6 +73,7 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "resources/models/minilm/": "resources/models/minilm/",
       "info.plist": "info.plist",
       "pluely.desktop": "pluely.desktop",
       "../transcription_service/main.py": "transcription_service/main.py",
