@@ -1,4 +1,4 @@
-import { PostHog } from "tauri-plugin-posthog-api";
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * Event names for tracking
@@ -18,7 +18,7 @@ export const captureEvent = async (
   properties?: Record<string, any>
 ) => {
   try {
-    await PostHog.capture(eventName, properties || {});
+    await invoke("capture_analytics_event", { event: eventName, properties: properties || {} });
   } catch (error) {
     // Silently fail - we don't want analytics to break the app
     console.debug("Analytics event failed:", eventName, error);

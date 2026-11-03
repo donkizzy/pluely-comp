@@ -1,0 +1,25 @@
+Date: 2026-11-03 (Africa/Lagos)
+RustSec advisory database: https://github.com/RustSec/advisory-db
+RustSec database revision: 6c5fedf8ff03c485ed674d8f941e0180f3f72d70
+Auditor: cargo-audit 0.22.2
+Toolchain: Rust 1.99.1, Node 26.8.2, Python 3.13
+
+PASS npm run build (TypeScript + Vite production build)
+PASS npm run test:security (7 tests)
+PASS transcription_service/.venv/bin/python -m unittest discover -s transcription_service -p 'test_*.py' (8 tests)
+PASS transcription_service runtime imports and pip check
+PASS cargo build --locked --offline --manifest-path src-tauri/Cargo.toml
+PASS cargo test --locked --offline --manifest-path src-tauri/Cargo.toml --lib (1 test)
+
+npm outdated: no outdated direct packages
+npm audit: 0 known vulnerabilities
+Python pinned runtime requirements audit: 0 known vulnerabilities
+Full Rust lockfile audit: 1 unpatched RSA advisory; 5 unmaintained notices; 1 GLib unsoundness notice
+Compiled macOS normal/build dependency graph: 0 known vulnerabilities; 1 unmaintained paste notice
+
+The macOS audit input was derived from cargo tree --edges normal,build --prefix none --format '{p}'.
+It excludes dependencies that Cargo does not compile for this platform. The full committed Cargo.lock
+was separately audited without suppressions; that result is rust-lock-audit.json.
+No advisory was added to an ignore list.
+
+Limitations: hardware audio/capture, installer signing, and Windows/Linux execution were not tested.

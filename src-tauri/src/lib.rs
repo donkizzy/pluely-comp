@@ -1,3 +1,4 @@
+mod analytics;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod capture;
 mod credentials;
@@ -6,7 +7,6 @@ mod shortcuts;
 mod window;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_plugin_posthog::{init as posthog_init, PostHogConfig, PostHogOptions};
 use tokio::task::JoinHandle;
 mod speaker;
 mod transcription;
@@ -46,9 +46,7 @@ fn get_app_version() -> String {
 pub fn run() {
     // Development secrets stay in the local environment, never in the executable.
     #[cfg(debug_assertions)]
-    dotenv::from_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env")).ok();
-    // Get PostHog API key
-    let posthog_api_key = option_env!("POSTHOG_API_KEY").unwrap_or("").to_string();
+    dotenvy::from_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env")).ok();
     let mut builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -68,19 +66,6 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(posthog_init(PostHogConfig {
-            api_key: posthog_api_key,
-            options: Some(PostHogOptions {
-                // disable session recording
-                disable_session_recording: Some(true),
-                // disable pageview
-                capture_pageview: Some(false),
-                // disable pageleave
-                capture_pageleave: Some(false),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
         .plugin(tauri_plugin_machine_uid::init());
     #[cfg(target_os = "macos")]
     {
@@ -89,6 +74,7 @@ pub fn run() {
     let mut builder = builder
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            analytics::capture_analytics_event,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

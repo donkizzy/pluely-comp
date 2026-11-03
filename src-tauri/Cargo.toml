@@ -23,7 +23,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
-dotenv = "0.15.0"
+dotenvy = "0.15.7"
 
 [dependencies]
 tauri = { version = "2.12.5", features = ["macos-private-api"] }
@@ -42,7 +42,7 @@ tokio = { version = "1.54.1", features = ["full"] }
 once_cell = "1.21.4"
 uuid = { version = "1.29.0", features = ["v4"] }
 reqwest = { version = "0.13.5", features = ["json", "stream", "multipart"] }
-dotenv = "0.15.0"
+dotenvy = "0.15.7"
 futures-util = "0.3.34"
 anyhow = "1.0.104"
 tracing = "0.1.44"
@@ -50,7 +50,6 @@ ringbuf = "0.6.0"
 tauri-plugin-shell = "2.6.0"
 tauri-plugin-process = "2.4.0"
 tauri-plugin-sql = { version = "2.6.0", features = ["sqlite"] }
-tauri-plugin-posthog = "0.2.4"
 tauri-plugin-machine-uid = "0.1.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
