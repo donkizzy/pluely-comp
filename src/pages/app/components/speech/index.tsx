@@ -20,6 +20,7 @@ import { ModeSwitcher } from "./ModeSwitcher";
 import { RecordingPanel } from "./RecordingPanel";
 import { ResultsSection } from "./ResultsSection";
 import { LiveTranscript } from "./LiveTranscript";
+import { StoryCards } from "./StoryCards";
 import { SettingsPanel } from "./SettingsPanel";
 import { PermissionFlow } from "./PermissionFlow";
 import { QuickActions } from "./QuickActions";
@@ -37,6 +38,7 @@ export const SystemAudio = (props: useSystemAudioType) => {
     latency,
     transcript,
     pendingText,
+    stories,
     answerTranscriptEntry,
     answerLatest,
     autoAnswerMode,
@@ -377,6 +379,9 @@ export const SystemAudio = (props: useSystemAudioType) => {
                         onAnswerLatest={answerLatest}
                       />
                     )}
+
+                    {/* Matching stories from your Story Bank */}
+                    <StoryCards stories={stories} />
 
                     {/* AI Response */}
                     <ResultsSection

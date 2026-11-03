@@ -2,17 +2,11 @@
 // Pure string heuristics: runs on every transcript segment, so it must be
 // instant and must not call a model.
 
-// Mirrors QuestionType in src/lib/context (owned by the knowledge track).
-// Switch to importing it from there once that module lands on main.
-export type QuestionType =
-  | "behavioral"
-  | "technical"
-  | "coding"
-  | "system_design"
-  | "situational"
-  | "small_talk"
-  | "logistics"
-  | "other";
+import type { QuestionType } from "../context";
+
+// The type is owned by the context module (knowledge track); re-exported here
+// for convenience.
+export type { QuestionType };
 
 const QUESTION_STARTS = [
   "what",

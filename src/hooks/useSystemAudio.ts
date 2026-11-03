@@ -25,6 +25,12 @@ import {
   classifyQuestion,
   isLikelyQuestion,
 } from "@/lib/interview";
+import {
+  buildInterviewContext,
+  ContextRequest,
+  ContextResult,
+  StoryCard,
+} from "@/lib/context";
 
 // VAD Configuration interface matching Rust
 export interface VadConfig {
@@ -117,6 +123,38 @@ interface SttTranscriptEvent {
 const getVariable = (variables: Record<string, string>, name: string) =>
   Object.entries(variables).find(([key]) => key.toUpperCase() === name)?.[1];
 
+const EMPTY_CONTEXT: ContextResult = {
+  systemPromptAddendum: "",
+  stories: [],
+  keyterms: [],
+};
+// Context should take ~50 ms; never let it hold up an answer for long.
+const CONTEXT_TIMEOUT_MS = 300;
+// Streaming providers cap keyterm lists; keep the most relevant first.
+const MAX_KEYTERMS = 50;
+
+async function getInterviewContext(req: ContextRequest): Promise<ContextResult> {
+  try {
+    const result = await Promise.race([
+      buildInterviewContext(req),
+      new Promise<ContextResult>((resolve) =>
+        setTimeout(() => resolve(EMPTY_CONTEXT), CONTEXT_TIMEOUT_MS)
+      ),
+    ]);
+    return result ?? EMPTY_CONTEXT;
+  } catch (error) {
+    console.error("Failed to build interview context:", error);
+    return EMPTY_CONTEXT;
+  }
+}
+
+// Stable parts first (system prompt, then personal context) so providers
+// can reuse their prompt cache between answers.
+const composePrompt = (base: string, context: ContextResult, guidance?: string) =>
+  [base, context.systemPromptAddendum.trim(), guidance]
+    .filter(Boolean)
+    .join("\n\n");
+
 const loadSetting = <T extends string>(key: string, allowed: T[], fallback: T) => {
   const saved = safeLocalStorage.getItem(key) as T | null;
   return saved && allowed.includes(saved) ? saved : fallback;
@@ -168,6 +206,9 @@ export function useSystemAudio() {
   const [latency, setLatency] = useState<TurnLatency>({});
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [pendingText, setPendingText] = useState("");
+  // Verified stories relevant to the question being answered.
+  const [stories, setStories] = useState<StoryCard[]>([]);
+  const contextSeqRef = useRef(0);
   const [autoAnswerMode, setAutoAnswerModeState] = useState<AutoAnswerMode>(
     () => loadSetting(AUTO_ANSWER_KEY, ["question", "every", "manual"], "question")
   );
@@ -422,17 +463,31 @@ export function useSystemAudio() {
       prev.map((e) => (e.id === entry.id ? { ...e, answered: true } : e))
     );
     setLastTranscription(entry.text);
-    const prompt = `${getEffectiveSystemPrompt()}\n\n${buildAnswerGuidance(
-      entry.questionType,
-      answerStyleRef.current
-    )}`;
     const previousMessages = conversationRef.current.messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
+    const seq = ++contextSeqRef.current;
     // Not awaited: the next utterance can be transcribed while this answer
     // streams. A newer answer aborts this one.
-    void processWithAI(entry.text, prompt, previousMessages, timing);
+    void getInterviewContext({
+      question: entry.text,
+      questionType: entry.questionType,
+      history: previousMessages.filter(
+        (m): m is { role: "user" | "assistant"; content: string } =>
+          m.role !== "system"
+      ),
+    }).then((context) => {
+      // A newer question arrived while context was loading.
+      if (seq !== contextSeqRef.current) return;
+      setStories(context.stories.filter((story) => story.verified).slice(0, 2));
+      const prompt = composePrompt(
+        getEffectiveSystemPrompt(),
+        context,
+        buildAnswerGuidance(entry.questionType, answerStyleRef.current)
+      );
+      void processWithAI(entry.text, prompt, previousMessages, timing);
+    });
   };
 
   // Close the pending turn: record it and answer it if the mode says so.
@@ -709,9 +764,26 @@ export function useSystemAudio() {
       return { role: msg.role, content: msg.content };
     });
 
-    await processWithAI(action, effectiveSystemPrompt, previousMessages, {
-      startedAt: performance.now(),
+    const startedAt = performance.now();
+    const seq = ++contextSeqRef.current;
+    const question = recentSpeech?.trim() || action;
+    const context = await getInterviewContext({
+      question,
+      questionType: classifyQuestion(question),
+      history: previousMessages.filter(
+        (m): m is { role: "user" | "assistant"; content: string } =>
+          m.role !== "system"
+      ),
     });
+    if (seq !== contextSeqRef.current) return;
+    setStories(context.stories.filter((story) => story.verified).slice(0, 2));
+
+    await processWithAI(
+      action,
+      composePrompt(effectiveSystemPrompt, context),
+      previousMessages,
+      { startedAt }
+    );
   };
 
   // Start continuous recording manually
@@ -872,6 +944,7 @@ export function useSystemAudio() {
 
       // Set up conversation
       setTranscript([]);
+      setStories([]);
       const conversationId = generateConversationId("sysaudio");
       setConversation({
         id: conversationId,
@@ -912,11 +985,17 @@ export function useSystemAudio() {
             "Live transcription needs an API key. Add it in Dev Space → Speech."
           );
         }
+        // Names, company and tech stack from the active profile/session help
+        // the provider spell jargon correctly.
+        const context = await getInterviewContext({ question: "" });
+        const keyterms = [
+          ...new Set(context.keyterms.map((k) => k.trim()).filter(Boolean)),
+        ].slice(0, MAX_KEYTERMS);
         streaming = {
           provider: sttProvider.realtime,
           apiKey,
           model: getVariable(selectedSttProvider.variables, "MODEL"),
-          keyterms: [],
+          keyterms,
         };
       }
       streamingRef.current = {
@@ -1108,6 +1187,7 @@ export function useSystemAudio() {
       updatedAt: 0,
     });
     setTranscript([]);
+    setStories([]);
     clearTurnTimer();
     pendingTurnRef.current = null;
     setPendingText("");
@@ -1240,6 +1320,7 @@ export function useSystemAudio() {
     // Live transcript and answering
     transcript,
     pendingText,
+    stories,
     answerTranscriptEntry,
     answerLatest,
     autoAnswerMode,
