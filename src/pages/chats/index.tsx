@@ -1,4 +1,6 @@
-import { Badge, Input, Card, Empty } from "@/components";
+import { useState } from "react";
+import { indexPastTranscripts } from "@/lib/database/transcripts.action";
+import { Badge, Input, Card, Empty, Button } from "@/components";
 import { useHistory } from "@/hooks";
 import { PageLayout } from "@/layouts";
 import { MessageCircleIcon, Search } from "lucide-react";
@@ -8,6 +10,14 @@ import { useNavigate } from "react-router-dom";
 const Dashboard = () => {
   const conversations = useHistory();
   const navigate = useNavigate();
+  const [indexing,setIndexing]=useState(false);
+  const [indexStatus,setIndexStatus]=useState("");
+  const indexHistory=async()=>{
+    setIndexing(true);
+    try{const count=await indexPastTranscripts();setIndexStatus(`${count} conversations indexed locally. Enable individual transcript sources in Your profile to use them in AI context.`);}
+    catch(e){setIndexStatus(e instanceof Error?e.message:String(e));}
+    finally{setIndexing(false);}
+  };
   // Group conversations by date
   const groupedConversations = conversations.conversations.reduce(
     (acc, doc) => {
@@ -32,6 +42,10 @@ const Dashboard = () => {
       description="View all your conversations"
     >
       <>
+        <div className="space-y-2">
+          <Button variant="outline" disabled={indexing} onClick={()=>void indexHistory()}>{indexing?"Indexing locally…":"Index past conversations"}</Button>
+          <p role="status" className="text-sm text-muted-foreground">{indexStatus}</p>
+        </div>
         {conversations.conversations.length === 0 ? (
           <Empty
             isLoading={conversations.isLoading}

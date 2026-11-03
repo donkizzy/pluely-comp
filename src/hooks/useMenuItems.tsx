@@ -74,6 +74,7 @@ export const useMenuItems = () => {
   // --- track B: knowledge ---
   menu.push(
     { icon: HomeIcon, label: "Your profile", href: "/profile" },
+    { icon: WandSparkles, label: "Story Bank", href: "/stories" },
   );
   // --- end track B: knowledge ---
 
