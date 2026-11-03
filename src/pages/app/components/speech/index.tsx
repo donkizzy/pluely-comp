@@ -21,6 +21,7 @@ import { RecordingPanel } from "./RecordingPanel";
 import { ResultsSection } from "./ResultsSection";
 import { LiveTranscript } from "./LiveTranscript";
 import { StoryCards } from "./StoryCards";
+import { PrepCheatSheet } from "./PrepCheatSheet";
 import { SettingsPanel } from "./SettingsPanel";
 import { PermissionFlow } from "./PermissionFlow";
 import { QuickActions } from "./QuickActions";
@@ -39,6 +40,8 @@ export const SystemAudio = (props: useSystemAudioType) => {
     transcript,
     pendingText,
     stories,
+    prepPack,
+    answerFromStory,
     answerTranscriptEntry,
     answerLatest,
     autoAnswerMode,
@@ -365,6 +368,9 @@ export const SystemAudio = (props: useSystemAudioType) => {
                       onIgnore={ignoreContinuousRecording}
                     />
 
+                    {/* Active session's prep pack */}
+                    <PrepCheatSheet prepPack={prepPack} />
+
                     {/* Live Transcript */}
                     {isVadMode && (
                       <LiveTranscript
@@ -381,7 +387,11 @@ export const SystemAudio = (props: useSystemAudioType) => {
                     )}
 
                     {/* Matching stories from your Story Bank */}
-                    <StoryCards stories={stories} />
+                    <StoryCards
+                      stories={stories}
+                      isAIProcessing={isAIProcessing}
+                      onStoryAction={answerFromStory}
+                    />
 
                     {/* AI Response */}
                     <ResultsSection

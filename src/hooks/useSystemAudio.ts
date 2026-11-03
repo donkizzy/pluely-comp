@@ -208,6 +208,8 @@ export function useSystemAudio() {
   const [pendingText, setPendingText] = useState("");
   // Verified stories relevant to the question being answered.
   const [stories, setStories] = useState<StoryCard[]>([]);
+  // Saved prep pack of the active interview session, if included.
+  const [prepPack, setPrepPack] = useState("");
   const contextSeqRef = useRef(0);
   const [autoAnswerMode, setAutoAnswerModeState] = useState<AutoAnswerMode>(
     () => loadSetting(AUTO_ANSWER_KEY, ["question", "every", "manual"], "question")
@@ -520,6 +522,37 @@ export function useSystemAudio() {
     }
   };
 
+  // Keep the prep pack current: on mount, when capture starts, and when the
+  // active session or profile changes in the dashboard window.
+  const refreshPrepPack = useCallback(async () => {
+    const context = await getInterviewContext({ question: "" });
+    setPrepPack(context.prepPack?.trim() ?? "");
+  }, []);
+
+  useEffect(() => {
+    void refreshPrepPack();
+    let cancelled = false;
+    const unlisteners: (() => void)[] = [];
+    Promise.all(
+      ["active-session-changed", "profile-changed"].map((name) =>
+        listen(name, () => void refreshPrepPack())
+      )
+    )
+      .then((fns) => {
+        if (cancelled) fns.forEach((fn) => fn());
+        else unlisteners.push(...fns);
+      })
+      .catch((err) => console.error("Failed to listen for session changes:", err));
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [refreshPrepPack]);
+
+  useEffect(() => {
+    if (capturing) void refreshPrepPack();
+  }, [capturing, refreshPrepPack]);
+
   // Live transcription: partial text shows as it is spoken; an end of turn
   // goes through the same turn pipeline as transcribed segments.
   useEffect(() => {
@@ -695,6 +728,27 @@ export function useSystemAudio() {
     setAnswerStyleState(style);
     safeLocalStorage.setItem(ANSWER_STYLE_KEY, style);
   }, []);
+
+  // Turn one of your approved stories into talking points or likely
+  // follow-ups for the question being answered.
+  const answerFromStory = (story: StoryCard, mode: "points" | "followups") => {
+    const storyText = story.long?.trim() || story.short;
+    const question = lastTranscription.trim();
+    const about = question ? ` for the question "${question}"` : "";
+    const instruction =
+      mode === "points"
+        ? `Turn this story of mine into 3-5 short talking points I can glance at while answering${about}. Use only the facts in the story.`
+        : `What 3 follow-up questions is the interviewer most likely to ask about this story${about}? For each, give a one or two sentence answer using only the facts in the story.`;
+    const previousMessages = conversationRef.current.messages.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    }));
+    void processWithAI(
+      `${instruction}\n\nStory: ${story.title}\n${storyText}`,
+      getEffectiveSystemPrompt(),
+      previousMessages
+    );
+  };
 
   // Answer a transcript line on demand ("Answer this").
   const answerTranscriptEntry = (id: string) => {
@@ -1321,6 +1375,8 @@ export function useSystemAudio() {
     transcript,
     pendingText,
     stories,
+    prepPack,
+    answerFromStory,
     answerTranscriptEntry,
     answerLatest,
     autoAnswerMode,
