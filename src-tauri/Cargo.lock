@@ -4424,6 +4424,7 @@ dependencies = [
  "ringbuf",
  "serde",
  "serde_json",
+ "silero-vad-crs",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
@@ -5687,6 +5688,15 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "silero-vad-crs"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b06646d849c282653d0e317cb066d22d14c51793f81067586f414ae9688a6fad"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

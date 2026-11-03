@@ -118,6 +118,7 @@ export const SettingsPanel = ({
       pre_speech_chunks: 12,
       noise_gate_threshold: 0.003,
       max_recording_duration_secs: 180,
+      neural: true,
     };
     onUpdateVadConfig(defaultConfig);
   };
@@ -151,8 +152,29 @@ export const SettingsPanel = ({
               Recording
             </h4>
 
-            {/* Sensitivity Presets - Only for VAD mode */}
+            {/* Neural speech detection - Only for VAD mode */}
             {vadConfig.enabled && (
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <Label className="text-xs font-medium">
+                    Smart speech detection
+                  </Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    Neural model (Silero) that ignores music, typing and
+                    background noise. Off uses volume thresholds.
+                  </p>
+                </div>
+                <Switch
+                  checked={vadConfig.neural !== false}
+                  onCheckedChange={(checked) =>
+                    onUpdateVadConfig({ ...vadConfig, neural: checked })
+                  }
+                />
+              </div>
+            )}
+
+            {/* Sensitivity Presets - Only for volume-based VAD */}
+            {vadConfig.enabled && vadConfig.neural === false && (
               <div className="space-y-2">
                 <Label className="text-xs font-medium">
                   Speech Sensitivity

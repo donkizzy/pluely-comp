@@ -37,6 +37,8 @@ export interface VadConfig {
   pre_speech_chunks: number;
   noise_gate_threshold: number;
   max_recording_duration_secs: number;
+  // Silero (neural) speech detection; energy thresholds are the fallback.
+  neural?: boolean;
 }
 
 // OPTIMIZED VAD defaults - matches backend exactly for perfect performance
@@ -50,6 +52,7 @@ const DEFAULT_VAD_CONFIG: VadConfig = {
   pre_speech_chunks: 12, // ~0.27s - enough to catch word start
   noise_gate_threshold: 0.003, // Stronger noise filtering
   max_recording_duration_secs: 180, // 3 minutes default
+  neural: true,
 };
 
 // Chat message interface (reusing from useCompletion)

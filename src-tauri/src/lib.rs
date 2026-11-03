@@ -11,6 +11,7 @@ use tokio::task::JoinHandle;
 mod speaker;
 // --- track A: live audio ---
 mod stt_stream;
+mod vad;
 // --- end track A ---
 mod transcription;
 use capture::CaptureState;

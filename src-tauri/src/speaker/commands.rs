@@ -1,6 +1,7 @@
 // Pluely AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
 use crate::speaker::{AudioDevice, SpeakerInput};
 use crate::stt_stream::{self, Downsampler, StreamingSttConfig, SttStreamHandle};
+use crate::vad::SpeechDetector;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::StreamExt;
@@ -27,6 +28,13 @@ pub struct VadConfig {
     pub pre_speech_chunks: usize,
     pub noise_gate_threshold: f32,
     pub max_recording_duration_secs: u64,
+    // Use Silero (neural) speech detection; energy thresholds are the fallback.
+    #[serde(default = "default_neural")]
+    pub neural: bool,
+}
+
+fn default_neural() -> bool {
+    true
 }
 
 impl Default for VadConfig {
@@ -41,6 +49,7 @@ impl Default for VadConfig {
             pre_speech_chunks: 12,  // ~0.27s - enough to catch word start
             noise_gate_threshold: 0.003, // Stronger noise filtering
             max_recording_duration_secs: 180, // 3 minutes default
+            neural: true,
         }
     }
 }
@@ -147,6 +156,11 @@ async fn run_vad_capture(
     let mut stream = stream;
     let mut downsampler = Downsampler::new(sr, stt_stream::STREAM_SAMPLE_RATE);
     let mut stream_chunk: Vec<f32> = Vec::with_capacity(config.hop_size);
+    let mut detector = if config.neural {
+        SpeechDetector::new()
+    } else {
+        None
+    };
     let mut buffer: VecDeque<f32> = VecDeque::new();
     let mut pre_speech: VecDeque<f32> =
         VecDeque::with_capacity(config.pre_speech_chunks * config.hop_size);
@@ -168,17 +182,21 @@ async fn run_vad_capture(
                 }
             }
 
+            // Both live transcription and Silero work on 16 kHz audio.
+            stream_chunk.clear();
+            downsampler.process(&mono, &mut stream_chunk);
             if let Some(handle) = stt.as_mut() {
-                stream_chunk.clear();
-                downsampler.process(&mono, &mut stream_chunk);
                 handle.push(&stream_chunk);
             }
+            let neural_speech = detector.as_mut().map(|d| d.process(&stream_chunk));
 
             // Apply noise gate BEFORE VAD (critical for accuracy)
             let mono = apply_noise_gate(&mono, config.noise_gate_threshold);
 
-            let (rms, peak) = calculate_audio_metrics(&mono);
-            let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
+            let is_speech = neural_speech.unwrap_or_else(|| {
+                let (rms, peak) = calculate_audio_metrics(&mono);
+                rms > config.sensitivity_rms || peak > config.peak_threshold
+            });
 
             if is_speech {
                 if !in_speech {
