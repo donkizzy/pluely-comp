@@ -9,6 +9,31 @@ export const SPEECH_TO_TEXT_PROVIDERS = [
     streaming: false,
   },
   {
+    // Live transcription over WebSocket. The curl is the fallback used for
+    // single utterances if the live stream fails.
+    id: "deepgram-live",
+    name: "Deepgram Live (streaming)",
+    curl: `curl -X POST "https://api.deepgram.com/v1/listen?model={{MODEL}}&smart_format=true" \\
+      -H "Authorization: TOKEN {{API_KEY}}" \\
+      -H "Content-Type: audio/wav" \\
+      --data-binary {{AUDIO}}`,
+    responseContentPath: "results.channels[0].alternatives[0].transcript",
+    streaming: false,
+    realtime: "deepgram" as const,
+  },
+  {
+    // Live transcription over WebSocket. AssemblyAI has no single-request
+    // transcription endpoint, so this curl only declares the API key; there
+    // is no fallback if the live stream fails.
+    id: "assemblyai-live",
+    name: "AssemblyAI Live (streaming)",
+    curl: `curl -X POST "https://streaming.assemblyai.com/v3/token" \\
+      -H "Authorization: {{API_KEY}}"`,
+    responseContentPath: "text",
+    streaming: false,
+    realtime: "assemblyai" as const,
+  },
+  {
     id: "openai-whisper",
     name: "OpenAI Whisper",
     curl: `curl -X POST "https://api.openai.com/v1/audio/transcriptions" \\

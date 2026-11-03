@@ -96,6 +96,24 @@ const TURN_MERGE_MS = 700;
 const AUTO_ANSWER_KEY = "system_audio_auto_answer";
 const ANSWER_STYLE_KEY = "system_audio_answer_style";
 
+// Matches StreamingSttConfig in src-tauri/src/stt_stream/mod.rs
+interface StreamingSttConfig {
+  provider: "deepgram" | "assemblyai";
+  apiKey: string;
+  model?: string;
+  language?: string;
+  keyterms: string[];
+}
+
+interface SttTranscriptEvent {
+  text: string;
+  endOfTurn: boolean;
+}
+
+// Provider variables may be stored in either case ("API_KEY" / "api_key").
+const getVariable = (variables: Record<string, string>, name: string) =>
+  Object.entries(variables).find(([key]) => key.toUpperCase() === name)?.[1];
+
 const loadSetting = <T extends string>(key: string, allowed: T[], fallback: T) => {
   const saved = safeLocalStorage.getItem(key) as T | null;
   return saved && allowed.includes(saved) ? saved : fallback;
@@ -157,6 +175,12 @@ export function useSystemAudio() {
   const pendingTurnRef = useRef<{ texts: string[]; startedAt: number; stt: number } | null>(null);
   const turnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finishTurnRef = useRef<() => void>(() => {});
+  // Live (WebSocket) transcription state for the current capture.
+  const streamingRef = useRef<{
+    active: boolean;
+    failed: boolean;
+    provider?: StreamingSttConfig["provider"];
+  }>({ active: false, failed: false });
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
   // Transcriptions run one at a time, in arrival order, so utterances are never
@@ -289,6 +313,10 @@ export function useSystemAudio() {
   // Recreated every render so it always sees current providers and prompts.
   handleSpeechRef.current = async (base64Audio: string, receivedAt: number) => {
     if (!capturingRef.current) return;
+    // Live transcription already covers this audio; segments are the fallback.
+    const streaming = streamingRef.current;
+    if (streaming.active && !streaming.failed) return;
+    if (streaming.active && streaming.provider === "assemblyai") return;
 
     if (!selectedSttProvider.provider) {
       setError("No speech provider selected.");
@@ -433,6 +461,55 @@ export function useSystemAudio() {
       answerTurn(entry, { startedAt: pending.startedAt, stt: pending.stt });
     }
   };
+
+  // Live transcription: partial text shows as it is spoken; an end of turn
+  // goes through the same turn pipeline as transcribed segments.
+  useEffect(() => {
+    let cancelled = false;
+    const unlisteners: (() => void)[] = [];
+    const register = async () => {
+      const fns = await Promise.all([
+        listen<SttTranscriptEvent>("stt-transcript", (event) => {
+          if (!capturingRef.current) return;
+          const { text, endOfTurn } = event.payload;
+          const earlier = pendingTurnRef.current?.texts.join(" ");
+          if (!endOfTurn) {
+            clearTurnTimer();
+            setPendingText(earlier ? `${earlier} ${text}` : text);
+            return;
+          }
+          const pending = pendingTurnRef.current;
+          if (pending) pending.texts.push(text);
+          else
+            pendingTurnRef.current = {
+              texts: [text],
+              startedAt: performance.now(),
+              stt: 0,
+            };
+          setPendingText(pendingTurnRef.current!.texts.join(" "));
+          if (text.endsWith("?")) finishTurnRef.current();
+          else scheduleTurnEnd();
+        }),
+        listen<string>("stt-stream-error", (event) => {
+          streamingRef.current.failed = true;
+          const fallback =
+            streamingRef.current.provider === "deepgram"
+              ? " Falling back to per-utterance transcription."
+              : " Live transcription stopped; restart capture to retry.";
+          setError(`${event.payload}.${fallback}`);
+        }),
+      ]);
+      if (cancelled) fns.forEach((fn) => fn());
+      else unlisteners.push(...fns);
+    };
+    register().catch((err) =>
+      console.error("Failed to set up live transcription listeners:", err)
+    );
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, []);
 
   // While the speaker keeps talking, hold the current turn open.
   useEffect(() => {
@@ -645,10 +722,12 @@ export function useSystemAudio() {
           ? selectedAudioDevices.output.id
           : null;
 
-      // Start a new continuous recording session
+      // Start a new continuous recording session (always per-recording STT)
+      streamingRef.current = { active: false, failed: false };
       await invoke<string>("start_system_audio_capture", {
         vadConfig: vadConfig,
         deviceId: deviceId,
+        streaming: null,
       });
     } catch (err) {
       console.error("Failed to start continuous recording:", err);
@@ -819,17 +898,42 @@ export function useSystemAudio() {
           ? selectedAudioDevices.output.id
           : null;
 
+      const sttProvider = allSttProviders.find(
+        (p) => p.id === selectedSttProvider.provider
+      );
+      let streaming: StreamingSttConfig | null = null;
+      if (sttProvider?.realtime) {
+        const apiKey = getVariable(selectedSttProvider.variables, "API_KEY");
+        if (!apiKey) {
+          throw new Error(
+            "Live transcription needs an API key. Add it in Dev Space → Speech."
+          );
+        }
+        streaming = {
+          provider: sttProvider.realtime,
+          apiKey,
+          model: getVariable(selectedSttProvider.variables, "MODEL"),
+          keyterms: [],
+        };
+      }
+      streamingRef.current = {
+        active: !!streaming,
+        failed: false,
+        provider: streaming?.provider,
+      };
+
       // Start capture with VAD config
       await invoke<string>("start_system_audio_capture", {
         vadConfig: vadConfig,
         deviceId: deviceId,
+        streaming,
       });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
       setIsPopoverOpen(true);
     }
-  }, [vadConfig, selectedAudioDevices.output.id]);
+  }, [vadConfig, selectedAudioDevices.output.id, selectedSttProvider, allSttProviders]);
 
   const stopCapture = useCallback(async () => {
     try {

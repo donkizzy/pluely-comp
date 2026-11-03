@@ -51,6 +51,8 @@ tauri-plugin-shell = "2.6.0"
 tauri-plugin-process = "2.4.0"
 tauri-plugin-sql = { version = "2.6.0", features = ["sqlite"] }
 tauri-plugin-machine-uid = "0.1.3"
+# track A: live audio
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-permissions = "2.3.0"

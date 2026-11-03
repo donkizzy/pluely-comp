@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::task::JoinHandle;
 mod speaker;
+// --- track A: live audio ---
+mod stt_stream;
+// --- end track A ---
 mod transcription;
 use capture::CaptureState;
 use speaker::VadConfig;

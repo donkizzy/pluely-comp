@@ -1,5 +1,6 @@
 // Pluely AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
 use crate::speaker::{AudioDevice, SpeakerInput};
+use crate::stt_stream::{self, Downsampler, StreamingSttConfig, SttStreamHandle};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::StreamExt;
@@ -49,6 +50,7 @@ pub async fn start_system_audio_capture(
     app: AppHandle,
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
+    streaming: Option<StreamingSttConfig>,
 ) -> Result<(), String> {
     let state = app.state::<crate::AudioState>();
 
@@ -110,7 +112,10 @@ pub async fn start_system_audio_capture(
     let state_clone = app.state::<crate::AudioState>();
     let task = tokio::spawn(async move {
         if vad_config.enabled {
-            run_vad_capture(app_clone.clone(), stream, sr, vad_config).await;
+            // Live transcription streams all audio; VAD segments still flow as
+            // the fallback path if the stream fails.
+            let stt = streaming.map(|config| stt_stream::spawn(app_clone.clone(), config));
+            run_vad_capture(app_clone.clone(), stream, sr, vad_config, stt).await;
         } else {
             run_continuous_capture(app_clone.clone(), stream, sr, vad_config).await;
         }
@@ -137,8 +142,11 @@ async fn run_vad_capture(
     stream: impl StreamExt<Item = f32> + Unpin,
     sr: u32,
     config: VadConfig,
+    mut stt: Option<SttStreamHandle>,
 ) {
     let mut stream = stream;
+    let mut downsampler = Downsampler::new(sr, stt_stream::STREAM_SAMPLE_RATE);
+    let mut stream_chunk: Vec<f32> = Vec::with_capacity(config.hop_size);
     let mut buffer: VecDeque<f32> = VecDeque::new();
     let mut pre_speech: VecDeque<f32> =
         VecDeque::with_capacity(config.pre_speech_chunks * config.hop_size);
@@ -158,6 +166,12 @@ async fn run_vad_capture(
                 if let Some(v) = buffer.pop_front() {
                     mono.push(v);
                 }
+            }
+
+            if let Some(handle) = stt.as_mut() {
+                stream_chunk.clear();
+                downsampler.process(&mono, &mut stream_chunk);
+                handle.push(&stream_chunk);
             }
 
             // Apply noise gate BEFORE VAD (critical for accuracy)
