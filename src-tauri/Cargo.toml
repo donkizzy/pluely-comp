@@ -54,6 +54,7 @@ tauri-plugin-machine-uid = "0.1.3"
 # track A: live audio
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 silero-vad-crs = "0.4"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi", "env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-permissions = "2.3.0"

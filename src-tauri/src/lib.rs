@@ -51,6 +51,17 @@ pub fn run() {
     // Development secrets stay in the local environment, never in the executable.
     #[cfg(debug_assertions)]
     dotenvy::from_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env")).ok();
+    // --- track A: live audio ---
+    // Development builds print backend logs (audio, streaming STT) to the
+    // terminal; override with RUST_LOG.
+    #[cfg(debug_assertions)]
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("pluely_lib=info")),
+        )
+        .try_init();
+    // --- end track A ---
     let mut builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_sql::Builder::default()
