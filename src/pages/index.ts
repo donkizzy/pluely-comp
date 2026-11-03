@@ -13,4 +13,6 @@ export { default as Responses } from "./responses";
 // --- track B: knowledge ---
 export { default as ProfilePage } from "./profile";
 export { default as StoriesPage } from "./stories";
+export { default as SessionsPage } from "./sessions";
+export { default as OnboardingPage } from "./dashboard/Onboarding";
 // --- end track B: knowledge ---

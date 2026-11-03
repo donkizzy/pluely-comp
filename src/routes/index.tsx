@@ -15,7 +15,7 @@ import {
 import { DashboardLayout } from "@/layouts";
 
 // --- track B: knowledge ---
-import { ProfilePage, StoriesPage } from "@/pages";
+import { ProfilePage, StoriesPage, SessionsPage, OnboardingPage } from "@/pages";
 // --- end track B: knowledge ---
 
 export default function AppRoutes() {
@@ -27,6 +27,8 @@ export default function AppRoutes() {
           {/* // --- track B: knowledge --- */}
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/stories" element={<StoriesPage />} />
+          <Route path="/sessions" element={<SessionsPage />} />
+          <Route path="/onboarding" element={<OnboardingPage />} />
           {/* // --- end track B: knowledge --- */}
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/chats" element={<Chats />} />

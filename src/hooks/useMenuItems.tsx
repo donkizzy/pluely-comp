@@ -75,6 +75,8 @@ export const useMenuItems = () => {
   menu.push(
     { icon: HomeIcon, label: "Your profile", href: "/profile" },
     { icon: WandSparkles, label: "Story Bank", href: "/stories" },
+    { icon: MessagesSquare, label: "Interview sessions", href: "/sessions" },
+    { icon: HomeIcon, label: "Get started", href: "/onboarding" },
   );
   // --- end track B: knowledge ---
 
