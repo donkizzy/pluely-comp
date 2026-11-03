@@ -28,9 +28,10 @@ const App = () => {
 
   return (
     <ErrorBoundary
-      fallbackRender={() => {
-        return <ErrorLayout isCompact />;
+      fallbackRender={({ error }) => {
+        return <ErrorLayout isCompact error={error} />;
       }}
+      onError={(error) => console.error("Overlay crashed:", error)}
       resetKeys={["app-error"]}
       onReset={() => {
         console.log("Reset");

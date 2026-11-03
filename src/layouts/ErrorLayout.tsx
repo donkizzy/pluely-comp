@@ -1,7 +1,19 @@
 import { Button, Card, DragButton } from "@/components";
 import { RefreshCcwIcon, SparklesIcon } from "lucide-react";
 
-export const ErrorLayout = ({ isCompact }: { isCompact?: boolean }) => {
+const describeError = (error: unknown) =>
+  error instanceof Error
+    ? `${error.name}: ${error.message}\n${error.stack ?? ""}`.trim()
+    : String(error);
+
+export const ErrorLayout = ({
+  isCompact,
+  error,
+}: {
+  isCompact?: boolean;
+  error?: unknown;
+}) => {
+  const details = error === undefined ? "" : describeError(error);
   return isCompact ? (
     <Card className="flex flex-row w-screen h-screen items-center justify-between p-4">
       <div className="flex size-8 items-center justify-center rounded-xl bg-foreground">
@@ -53,7 +65,22 @@ export const ErrorLayout = ({ isCompact }: { isCompact?: boolean }) => {
           >
             <RefreshCcwIcon className="size-4" /> Reload
           </Button>
+          {details && (
+            <Button
+              variant="outline"
+              onClick={() => navigator.clipboard.writeText(details)}
+              className="w-full"
+            >
+              Copy error details
+            </Button>
+          )}
         </div>
+
+        {details && (
+          <pre className="max-h-40 w-full overflow-auto rounded-md bg-muted p-3 text-left text-[10px] text-muted-foreground whitespace-pre-wrap">
+            {details}
+          </pre>
+        )}
       </div>
     </div>
   );
