@@ -13,7 +13,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub const STREAM_SAMPLE_RATE: u32 = 16_000;
 // ~100 ms of 16 kHz audio per WebSocket frame (both providers accept 50-1000 ms).
@@ -203,11 +203,23 @@ async fn run(
             let Ok(value) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
+            // Raw provider messages, for diagnosing turn handling (debug only).
+            debug!(
+                "provider message: type={:?} is_final={:?} speech_final={:?} end_of_turn={:?} text={:?}",
+                value.get("type"),
+                value.get("is_final"),
+                value.get("speech_final"),
+                value.get("end_of_turn"),
+                value
+                    .pointer("/channel/alternatives/0/transcript")
+                    .or_else(|| value.get("transcript"))
+            );
             let event = match provider {
                 StreamingProvider::Deepgram => normalizer.deepgram(&value),
                 StreamingProvider::Assemblyai => normalizer.assemblyai(&value)?,
             };
             if let Some(event) = event {
+                debug!("emit stt-transcript: {:?}", event);
                 let _ = reader_app.emit("stt-transcript", event);
             }
         }
