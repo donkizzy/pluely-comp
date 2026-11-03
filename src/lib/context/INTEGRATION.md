@@ -25,7 +25,7 @@ Existing conversations retain their session when a different session is selected
 
 - MiniLM files are bundled under resources/models/minilm with pinned provenance,
   Apache-2.0 license, and SHA-256 checksums. There is no runtime model download.
-- PDF/DOCX parsing and embeddings are local. URL import fetches only on a user action.
+- PDF/DOCX parsing and embeddings are local. URL import fetches only on a user action. Portfolio HTML is parsed as a pure AST without browser resource loads.
 - Every AI drafting request uses the unchanged fetchAIResponse with the selected
   provider and an editable input preview. No proxy, telemetry, or licensed API.
 - Story edits revoke approval. Atomic index/approval checks prevent approval of
@@ -37,5 +37,6 @@ Existing conversations retain their session when a different session is selected
 ## Verification
 
 Run `npm run build`, `cargo check` in src-tauri, `node --test tests/`, and
-`node --test src/lib/context/knowledge.test.mjs`.
+`node --test src/lib/context/knowledge.test.mjs`, and
+`node --test src/pages/profile/html.test.mjs`.
 Rust retrieval/model tests: `cargo test --lib kb:: -- --nocapture`.

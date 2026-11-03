@@ -144,23 +144,6 @@ export async function importUrl(
     };
   }
   const html = await readUrl(url.toString());
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  doc
-    .querySelectorAll(
-      "script,style,nav,footer,header,aside,form,iframe,noscript,svg",
-    )
-    .forEach((el) => el.remove());
-  const root =
-    doc.querySelector("article") || doc.querySelector("main") || doc.body;
-  root
-    .querySelectorAll("p,li,h1,h2,h3,div,br")
-    .forEach((el) => el.append(doc.createTextNode("\n")));
-  return {
-    title: doc.title || url.hostname,
-    content: (root.textContent || "")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n\s*\n/g, "\n\n")
-      .trim()
-      .slice(0, 100000),
-  };
+  const { portfolioText } = await import("./html");
+  return portfolioText(html, url.hostname);
 }
