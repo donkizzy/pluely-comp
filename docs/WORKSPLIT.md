@@ -90,6 +90,7 @@ export interface ContextResult {
   systemPromptAddendum: string;
   stories: StoryCard[];   // max 2, verified only
   keyterms: string[];     // names, company, tech stack, for STT boosting
+  prepPack?: string;      // saved prep for the included active session; user-approved extension (2026-11-03)
 }
 
 export async function buildInterviewContext(req: ContextRequest): Promise<ContextResult>;
@@ -97,6 +98,7 @@ export async function buildInterviewContext(req: ContextRequest): Promise<Contex
 
 - Must return within ~50 ms after warm-up and never throw: on any error, return empty results.
 - Reads the active session itself (section 3.2); Track A doesn't pass a session id.
+- The user approved `prepPack?: string` on 2026-11-03. Track B supplies it; Track A owns the overlay pin control.
 
 ### 3.2 Active session across windows (Track B)
 

@@ -153,6 +153,8 @@ Low risk, immediate benefit; do before any new feature.
    - Replaces pasting the resume into the system prompt; existing system prompts still work on top.
 5. **Privacy:** everything stored locally; a per-source "include in AI context" toggle; a "what will be sent" preview for any answer.
 
+**Track B implementation (2026-11-03):** Profile/source ingestion and privacy previews, SQLite knowledge storage, bundled quantized MiniLM, hybrid vector/FTS5 search, and the fail-safe context builder are implemented. The model is pinned with checksums and a license under `src-tauri/resources/models/minilm/`. `fastembed` 5.2.0 is pinned because its ONNX distribution includes both Intel and Apple Silicon macOS binaries as well as Windows/Linux. PDF extraction was checked in the browser; the browser DOCX parser and bundled-model retrieval were also exercised locally. Native Windows/Linux execution still needs runners.
+
 ### Phase 3 — Story Bank & story generation (≈1–1.5 weeks)
 
 **Goal:** when asked "Tell me about a time…", the overlay instantly surfaces your best real story, shaped for the question.
@@ -164,6 +166,8 @@ Low risk, immediate benefit; do before any new feature.
 5. **Answer modes** quick-switch: *Talking points*, *30-second*, *Full STAR script*, *Follow-up likely*.
 6. **Saved interview transcripts as context (read-only):** past sessions' interviewer questions + generated answers are indexed (`kind=transcript`) so "they asked this last time at Company X" can surface. (Learning from *your spoken* answers stays deferred.)
 
+**Track B implementation (2026-11-03):** STAR editing/approval, selected-provider draft mining, competency gaps, Story Bank answer views, and explicit read-only transcript indexing are implemented. Both search paths filter excluded and unapproved stories. Editing revokes approval; live context returns at most two approved cards. Indexed AI suggestions are labelled and cannot count as candidate-authored achievements. Overlay answer-mode controls remain Track A UI work.
+
 ### Phase 4 — Interview sessions & UX polish (≈1–1.5 weeks)
 
 1. **Interview Session object**: company, role, round type (recruiter/behavioral/technical/system design), interviewer names, JD paste/URL, date. Selecting a session sets context, keyterms, and the system prompt template. Conversation rows link to `session_id`.
@@ -172,6 +176,8 @@ Low risk, immediate benefit; do before any new feature.
 4. **Post-interview debrief**: auto summary, questions asked, topics to brush up on, thank-you email draft, saved to the session.
 5. **Overlay UX**: keyboard-first controls (shorter / expand / give example / next question), compact "teleprompter" view with large text and auto-scroll, pin answer, copy, adjustable opacity per mode, remember window position per display.
 6. **Onboarding wizard**: pick providers → test STT → upload resume → create first session → practice run.
+
+**Track B implementation for items 1, 2, 4 and 6 (2026-11-03):** Sessions, active-session events/state, conversation links, editable prep packs, debrief/thank-you drafts, and onboarding/practice are implemented. Provider requests have editable previews and use the selected provider directly. The user approved the optional `ContextResult.prepPack` extension; Track A must render its pinned overlay control. Native Windows/Linux validation is pending runner access.
 
 ### Later / deferred
 
