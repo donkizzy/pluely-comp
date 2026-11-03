@@ -11,7 +11,6 @@ import {
 } from "@/config";
 import {
   safeLocalStorage,
-  shouldUsePluelyAPI,
   generateConversationTitle,
   saveConversation,
   CONVERSATION_SAVE_DEBOUNCE_MS,
@@ -63,6 +62,14 @@ export interface ChatConversation {
   updatedAt: number;
 }
 
+// Per-turn latency in ms, measured from the moment the speech segment
+// (or quick action) reached the frontend.
+export interface TurnLatency {
+  stt?: number;
+  firstToken?: number;
+  total?: number;
+}
+
 export type useSystemAudioType = ReturnType<typeof useSystemAudio>;
 
 export function useSystemAudio() {
@@ -106,7 +113,20 @@ export function useSystemAudio() {
     systemPrompt,
     selectedAudioDevices,
   } = useApp();
+  const [latency, setLatency] = useState<TurnLatency>({});
   const abortControllerRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
+  // Transcriptions run one at a time, in arrival order, so utterances are never
+  // dropped or reordered while the STT provider is busy.
+  const sttQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Latest render values for the long-lived speech listener.
+  const capturingRef = useRef(capturing);
+  const conversationRef = useRef(conversation);
+  const handleSpeechRef = useRef<
+    (base64Audio: string, receivedAt: number) => Promise<void>
+  >(async () => {});
+  capturingRef.current = capturing;
+  conversationRef.current = conversation;
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSavingRef = useRef<boolean>(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -216,109 +236,111 @@ export function useSystemAudio() {
     };
   }, []);
 
-  // Handle single speech detection event (both VAD and continuous modes)
-  useEffect(() => {
-    let speechUnlisten: (() => void) | undefined;
+  // Handle a single speech segment (both VAD and continuous modes).
+  // Recreated every render so it always sees current providers and prompts.
+  handleSpeechRef.current = async (base64Audio: string, receivedAt: number) => {
+    if (!capturingRef.current) return;
 
-    const setupEventListener = async () => {
-      try {
-        speechUnlisten = await listen("speech-detected", async (event) => {
-          try {
-            if (!capturing) return;
+    if (!selectedSttProvider.provider) {
+      setError("No speech provider selected.");
+      return;
+    }
 
-            const base64Audio = event.payload as string;
-            // Convert to blob
-            const binaryString = atob(base64Audio);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-            const audioBlob = new Blob([bytes], { type: "audio/wav" });
+    const providerConfig = allSttProviders.find(
+      (p) => p.id === selectedSttProvider.provider
+    );
+    if (!providerConfig) {
+      setError("Speech provider config not found.");
+      return;
+    }
 
-            const usePluelyAPI = await shouldUsePluelyAPI();
-            if (!selectedSttProvider.provider && !usePluelyAPI) {
-              setError("No speech provider selected.");
-              return;
-            }
+    const bytes = Uint8Array.from(atob(base64Audio), (c) => c.charCodeAt(0));
+    const audioBlob = new Blob([bytes], { type: "audio/wav" });
 
-            const providerConfig = allSttProviders.find(
-              (p) => p.id === selectedSttProvider.provider
-            );
+    setIsProcessing(true);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeoutPromise = new Promise<string>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Speech transcription timed out (30s)")),
+          30000
+        );
+      });
 
-            if (!providerConfig && !usePluelyAPI) {
-              setError("Speech provider config not found.");
-              return;
-            }
+      const transcription = await Promise.race([
+        fetchSTT({
+          provider: providerConfig,
+          selectedProvider: selectedSttProvider,
+          audio: audioBlob,
+        }),
+        timeoutPromise,
+      ]);
 
-            setIsProcessing(true);
+      // Capture may have been stopped while we were transcribing.
+      if (!capturingRef.current) return;
 
-            // Add timeout wrapper for STT request (30 seconds)
-            const sttPromise = fetchSTT({
-              provider: providerConfig,
-              selectedProvider: selectedSttProvider,
-              audio: audioBlob,
-            });
-
-            const timeoutPromise = new Promise<string>((_, reject) => {
-              setTimeout(
-                () => reject(new Error("Speech transcription timed out (30s)")),
-                30000
-              );
-            });
-
-            try {
-              const transcription = await Promise.race([
-                sttPromise,
-                timeoutPromise,
-              ]);
-
-              if (transcription.trim()) {
-                setLastTranscription(transcription);
-                setError("");
-
-                const effectiveSystemPrompt = useSystemPrompt
-                  ? systemPrompt || DEFAULT_SYSTEM_PROMPT
-                  : contextContent || DEFAULT_SYSTEM_PROMPT;
-
-                const previousMessages = conversation.messages.map((msg) => {
-                  return { role: msg.role, content: msg.content };
-                });
-
-                await processWithAI(
-                  transcription,
-                  effectiveSystemPrompt,
-                  previousMessages
-                );
-              } else {
-                setError("Received empty transcription");
-              }
-            } catch (sttError: any) {
-              console.error("STT Error:", sttError);
-              setError(sttError.message || "Failed to transcribe audio");
-              setIsPopoverOpen(true);
-            }
-          } catch (err) {
-            setError("Failed to process speech");
-          } finally {
-            setIsProcessing(false);
-          }
-        });
-      } catch (err) {
-        setError("Failed to setup speech listener");
+      if (!transcription.trim()) {
+        setError("Received empty transcription");
+        return;
       }
-    };
 
-    setupEventListener();
+      setLastTranscription(transcription);
+      setError("");
+
+      const effectiveSystemPrompt = useSystemPrompt
+        ? systemPrompt || DEFAULT_SYSTEM_PROMPT
+        : contextContent || DEFAULT_SYSTEM_PROMPT;
+
+      const previousMessages = conversationRef.current.messages.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      }));
+
+      // Not awaited: the next utterance can be transcribed while this answer
+      // streams. A newer answer aborts this one.
+      void processWithAI(
+        transcription,
+        effectiveSystemPrompt,
+        previousMessages,
+        { startedAt: receivedAt, stt: performance.now() - receivedAt }
+      );
+    } catch (sttError: any) {
+      console.error("STT Error:", sttError);
+      setError(sttError.message || "Failed to transcribe audio");
+      setIsPopoverOpen(true);
+    } finally {
+      clearTimeout(timeoutId);
+      setIsProcessing(false);
+    }
+  };
+
+  // Register the speech listener once for the hook's lifetime.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<string>("speech-detected", (event) => {
+      if (!capturingRef.current) return;
+      const receivedAt = performance.now();
+      sttQueueRef.current = sttQueueRef.current
+        .then(() => handleSpeechRef.current(event.payload, receivedAt))
+        .catch((err) => {
+          console.error("Failed to process speech:", err);
+          setError("Failed to process speech");
+        });
+    })
+      .then((fn) => {
+        // The effect may have been cleaned up before listen() resolved.
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => setError("Failed to setup speech listener"));
 
     return () => {
-      if (speechUnlisten) speechUnlisten();
+      cancelled = true;
+      unlisten?.();
     };
-  }, [
-    capturing,
-    selectedSttProvider,
-    allSttProviders,
-    conversation.messages.length,
-  ]);
+  }, []);
 
   // Context management functions
   const saveContextSettings = useCallback(
@@ -413,7 +435,7 @@ export function useSystemAudio() {
         // Update conversation state with the latest transcription
         setConversation((prev) => ({
           ...prev,
-          messages: [userMessage, ...prev.messages],
+          messages: [...prev.messages, userMessage],
           updatedAt: timestamp,
           title: prev.title || generateConversationTitle(lastTranscription),
         }));
@@ -424,7 +446,9 @@ export function useSystemAudio() {
       return { role: msg.role, content: msg.content };
     });
 
-    await processWithAI(action, effectiveSystemPrompt, previousMessages);
+    await processWithAI(action, effectiveSystemPrompt, previousMessages, {
+      startedAt: performance.now(),
+    });
   };
 
   // Start continuous recording manually
@@ -467,28 +491,32 @@ export function useSystemAudio() {
     }
   }, [isContinuousMode, isRecordingInContinuousMode]);
 
-  // AI Processing function
+  // AI Processing function. previousMessages must be in chronological order.
   const processWithAI = useCallback(
     async (
       transcription: string,
       prompt: string,
-      previousMessages: Message[]
-    ) => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
+      previousMessages: Message[],
+      timing: { startedAt: number; stt?: number } = {
+        startedAt: performance.now(),
       }
-
-      abortControllerRef.current = new AbortController();
+    ) => {
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const requestId = ++requestIdRef.current;
+      const isCurrent = () =>
+        requestIdRef.current === requestId && !controller.signal.aborted;
 
       try {
         setIsAIProcessing(true);
         setLastAIResponse("");
         setError("");
+        setLatency({ stt: timing.stt });
 
         let fullResponse = "";
 
-        const usePluelyAPI = await shouldUsePluelyAPI();
-        if (!selectedAIProvider.provider && !usePluelyAPI) {
+        if (!selectedAIProvider.provider) {
           setError("No AI provider selected.");
           return;
         }
@@ -496,32 +524,47 @@ export function useSystemAudio() {
         const provider = allAiProviders.find(
           (p) => p.id === selectedAIProvider.provider
         );
-        if (!provider && !usePluelyAPI) {
+        if (!provider) {
           setError("AI provider config not found.");
           return;
         }
 
         try {
           for await (const chunk of fetchAIResponse({
-            provider: usePluelyAPI ? undefined : provider,
+            provider,
             selectedProvider: selectedAIProvider,
             systemPrompt: prompt,
             history: previousMessages,
             userMessage: transcription,
             imagesBase64: [],
+            signal: controller.signal,
           })) {
+            if (!isCurrent()) return;
+            if (!fullResponse) {
+              const firstToken = performance.now() - timing.startedAt;
+              setLatency((prev) => ({ ...prev, firstToken }));
+            }
             fullResponse += chunk;
             setLastAIResponse((prev) => prev + chunk);
           }
         } catch (aiError: any) {
-          setError(aiError.message || "Failed to get AI response");
+          if (isCurrent()) {
+            setError(aiError.message || "Failed to get AI response");
+          }
         }
+
+        if (!isCurrent()) return;
+        setLatency((prev) => ({
+          ...prev,
+          total: performance.now() - timing.startedAt,
+        }));
 
         if (fullResponse) {
           const timestamp = Date.now();
           setConversation((prev) => ({
             ...prev,
             messages: [
+              ...prev.messages,
               {
                 id: generateMessageId("user", timestamp),
                 role: "user" as const,
@@ -534,20 +577,19 @@ export function useSystemAudio() {
                 content: fullResponse,
                 timestamp: timestamp + 1,
               },
-              ...prev.messages,
             ],
             updatedAt: timestamp,
             title: prev.title || generateConversationTitle(transcription),
           }));
         }
       } catch (err) {
-        setError("Failed to get AI response");
+        if (isCurrent()) setError("Failed to get AI response");
       } finally {
-        setIsAIProcessing(false);
-        // No auto-restart - user manually controls when to start next recording
+        // A newer request owns the processing flag once it has started.
+        if (requestIdRef.current === requestId) setIsAIProcessing(false);
       }
     },
-    [selectedAIProvider, allAiProviders, conversation.messages]
+    [selectedAIProvider, allAiProviders]
   );
 
   const startCapture = useCallback(async () => {
@@ -896,6 +938,7 @@ export function useSystemAudio() {
     setConversation,
     // AI processing
     processWithAI,
+    latency,
     // Context management
     useSystemPrompt,
     setUseSystemPrompt: updateUseSystemPrompt,

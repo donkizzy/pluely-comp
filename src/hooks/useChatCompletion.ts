@@ -6,7 +6,6 @@ import {
   saveConversation,
   getConversationById,
   generateConversationTitle,
-  shouldUsePluelyAPI,
   MESSAGE_ID_OFFSET,
   generateMessageId,
   generateRequestId,
@@ -60,7 +59,6 @@ export const useChatCompletion = (
     selectedSttProvider,
     allSttProviders,
     selectedAudioDevices,
-    hasActiveLicense,
   } = useApp();
 
   const [state, setState] = useState<ChatCompletionState>({
@@ -174,9 +172,8 @@ export const useChatCompletion = (
           });
         }
 
-        const usePluelyAPI = await shouldUsePluelyAPI();
         // Check if AI provider is configured
-        if (!selectedAIProvider.provider && !usePluelyAPI) {
+        if (!selectedAIProvider.provider) {
           setState((prev) => ({
             ...prev,
             error: "Please select an AI provider in settings",
@@ -187,7 +184,7 @@ export const useChatCompletion = (
         const provider = allAiProviders.find(
           (p) => p.id === selectedAIProvider.provider
         );
-        if (!provider && !usePluelyAPI) {
+        if (!provider) {
           setState((prev) => ({
             ...prev,
             error: "Invalid provider selected",
@@ -227,7 +224,7 @@ export const useChatCompletion = (
         try {
           // Use the fetchAIResponse function with signal
           for await (const chunk of fetchAIResponse({
-            provider: usePluelyAPI ? undefined : provider,
+            provider: provider,
             selectedProvider: selectedAIProvider,
             systemPrompt: systemPrompt || undefined,
             history: messageHistory,
@@ -591,16 +588,6 @@ export const useChatCompletion = (
         screenshotInitiatedByThisContext.current = false;
       } else {
         // Selection Mode: Open overlay to select an area
-        // Only allow if user has active license
-        if (!hasActiveLicense) {
-          setState((prev) => ({
-            ...prev,
-            error: "Selection mode requires an active license",
-          }));
-          setIsScreenshotLoading(false);
-          screenshotInitiatedByThisContext.current = false;
-          return;
-        }
         isProcessingScreenshotRef.current = false;
         await invoke("start_screen_capture");
       }
@@ -616,7 +603,7 @@ export const useChatCompletion = (
         setIsScreenshotLoading(false);
       }
     }
-  }, [handleScreenshotSubmit, hasActiveLicense]);
+  }, [handleScreenshotSubmit]);
 
   useEffect(() => {
     let unlisten: any;
@@ -720,6 +707,5 @@ export const useChatCompletion = (
     selectedSttProvider,
     allSttProviders,
     selectedAudioDevices,
-    hasActiveLicense,
   };
 };

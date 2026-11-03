@@ -36,13 +36,12 @@ It is launched and killed by the Rust backend via `transcription::start_transcri
 
 `.env` (loaded by `src-tauri/build.rs` via `dotenv`) bakes a few values into the Rust binary at compile time:
 
-- `APP_ENDPOINT`, `API_ACCESS_KEY`, `PAYMENT_ENDPOINT` — only needed for the Pluely licensed/cloud API path. Local DeepSeek + Faster-Whisper works without them.
 - `POSTHOG_API_KEY` — telemetry (session recording / pageviews are force-disabled in `lib.rs`).
 - `TRANSCRIPTION_PORT` (default `8787`), `WHISPER_MODEL` (default `small.en`), `WHISPER_COMPUTE_TYPE` (default `int8`) — read at runtime by the Python sidecar.
 
 ## Architecture
 
-Pluely is a Tauri 2 desktop app: **React 19 + TypeScript frontend** (`src/`), **Rust backend** (`src-tauri/src/`), and an **optional Python FastAPI sidecar** for local Whisper transcription (`transcription_service/`). All persistent app data lives on the user's device — SQLite for chat/prompts, `localStorage` for settings, OS keychain for license keys.
+Pluely is a Tauri 2 desktop app: **React 19 + TypeScript frontend** (`src/`), **Rust backend** (`src-tauri/src/`), and an **optional Python FastAPI sidecar** for local Whisper transcription (`transcription_service/`). All persistent app data lives on the user's device — SQLite for chat/prompts, `localStorage` for settings, OS keychain for provider settings (including API keys).
 
 ### Window model — two React entry points in one bundle
 
@@ -63,20 +62,19 @@ Everything is plumbed through `tauri::generate_handler![...]` in `lib.rs`. When 
 
 - `window.rs` — main/dashboard window creation, sizing, positioning, move/toggle.
 - `capture.rs` — screenshot capture (full screen + drag-to-select via per-monitor `capture-overlay-N` windows).
-- `shortcuts.rs` — global shortcut registration with `tauri-plugin-global-shortcut`. `RegisteredShortcuts` holds the active bindings; the central handler in `lib.rs` dispatches by action_id, with a special `move_window_<direction>` prefix for press/release handling of arrow-key window movement. `LicenseState` gates certain actions.
+- `shortcuts.rs` — global shortcut registration with `tauri-plugin-global-shortcut`. `RegisteredShortcuts` holds the active bindings; the central handler in `lib.rs` dispatches by action_id, with a special `move_window_<direction>` prefix for press/release handling of arrow-key window movement.
 - `speaker/` — system audio capture, split per OS (`macos.rs` uses `cidre` ScreenCaptureKit, `windows.rs` uses WASAPI loopback, `linux.rs` uses PulseAudio). Shared VAD config + ringbuf in `mod.rs`; commands in `commands.rs`.
 - `transcription.rs` — manages the Python FastAPI sidecar lifecycle. Killed automatically when the `main` window is destroyed (see `on_window_event` in `lib.rs`).
-- `api.rs` — server-side HTTP calls for licensed/cloud features (chat streaming, transcription, models, prompts, activity).
-- `activate.rs` — license activation, validation, masking; secure storage via `tauri-plugin-keychain`.
+- `credentials.rs` — `provider_settings_get` / `provider_settings_save`: provider selections and custom providers (which hold API keys) in the OS credential store via `keyring`.
 - `db/` — `tauri-plugin-sql` SQLite migrations (`migrations/system-prompts.sql`, `migrations/chat-history.sql`). Migrations are owned by Rust; the frontend talks to the same DB via `@tauri-apps/plugin-sql` (`src/lib/database/config.ts`, DB name `sqlite:pluely.db`).
 
 The window-destroyed handler only acts when `window.label() == "main"` — closing the dashboard does not kill the transcription service.
 
 ### Frontend structure (`src/`)
 
-- `contexts/app.context.tsx` is the central state hub. It owns the system prompt, selected AI/STT providers, custom curl-based providers (parsed/validated with `@bany/curl-to-json`), audio device selection, screenshot config, shortcut config, license state, and customizable settings (theme, transparency, autostart, dock visibility, always-on-top, cursor type). It listens to Tauri events and persists most state to `localStorage` via `lib/storage/`.
+- `contexts/app.context.tsx` is the central state hub. It owns the system prompt, selected AI/STT providers, custom curl-based providers (parsed/validated with `@bany/curl-to-json`), audio device selection, screenshot config, shortcut config, and customizable settings (theme, transparency, autostart, dock visibility, always-on-top, cursor type). It listens to Tauri events and persists most state to `localStorage` via `lib/storage/`.
 - `hooks/` — feature-level hooks (`useChatCompletion`, `useCompletion`, `useSystemAudio`, `useGlobalShortcuts`, `useHistory`, `useSettings`, …). These are the layer the pages compose.
-- `lib/functions/` — the actual AI / STT request execution. `ai-response.function.ts` and `stt.function.ts` substitute the `{{TEXT}}`, `{{IMAGE}}`, `{{SYSTEM_PROMPT}}`, `{{MODEL}}`, `{{API_KEY}}`, `{{AUDIO}}`, `{{LANGUAGE}}` variables into user-defined curl templates and stream responses. `pluely.api.ts` is the licensed/cloud path.
+- `lib/functions/` — the actual AI / STT request execution. `ai-response.function.ts` and `stt.function.ts` substitute the `{{TEXT}}`, `{{IMAGE}}`, `{{SYSTEM_PROMPT}}`, `{{MODEL}}`, `{{API_KEY}}`, `{{AUDIO}}`, `{{LANGUAGE}}` variables into user-defined curl templates and stream responses.
 - `lib/database/` — chat-history and system-prompt actions; works on top of the SQLite DB the Rust side migrates.
 - `lib/storage/` — typed wrappers around `localStorage` for each settings cluster.
 - `config/ai-providers.constants.ts` and `config/stt.constants.ts` — the curated list of pre-configured providers (OpenAI, Anthropic, Gemini, Groq, Ollama, Whisper, Deepgram, …). Custom providers are user-added curl commands stored under `curl_custom_*` keys in `localStorage`.
@@ -98,5 +96,5 @@ When adding a new built-in provider, add it to `src/config/ai-providers.constant
 ### Privacy invariants (don't break these)
 
 - Chat history, attachments, settings: never leave the device. Telemetry (PostHog) is opted in to events only — session recording, pageviews, pageleaves are disabled in `lib.rs`.
-- API keys and license tokens: keys live in `localStorage`; the license key is in OS keychain via `activate::secure_storage_*`.
+- API keys: provider settings live in the OS keychain via `credentials::provider_settings_*`; `localStorage` holds metadata only. There is no licensed/cloud Pluely API — the app is bring-your-own-key only.
 - Third-party LLM/STT calls go **directly** from the user's device to the chosen provider — there is no proxy. Preserve this when adding providers.

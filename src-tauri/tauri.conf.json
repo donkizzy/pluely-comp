@@ -72,10 +72,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "info.plist",
-      "pluely.desktop"
-    ],
+    "resources": {
+      "info.plist": "info.plist",
+      "pluely.desktop": "pluely.desktop",
+      "../transcription_service/main.py": "transcription_service/main.py",
+      "../transcription_service/requirements.txt": "transcription_service/requirements.txt",
+      "../transcription_service/README.md": "transcription_service/README.md"
+    },
     "macOS": {
       "minimumSystemVersion": "10.13"
     }

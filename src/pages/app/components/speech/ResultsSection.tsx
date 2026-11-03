@@ -2,6 +2,7 @@ import { ChatConversation } from "@/types";
 import { Markdown, Switch, CopyButton } from "@/components";
 import { BotIcon, HeadphonesIcon, Loader2, SparklesIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TurnLatency } from "@/hooks/useSystemAudio";
 
 type Props = {
   lastTranscription: string;
@@ -10,7 +11,11 @@ type Props = {
   conversation: ChatConversation;
   conversationMode: boolean;
   setConversationMode: (mode: boolean) => void;
+  latency: TurnLatency;
 };
+
+const formatSeconds = (ms?: number) =>
+  ms === undefined ? null : `${(ms / 1000).toFixed(1)}s`;
 
 export const ResultsSection = ({
   lastTranscription,
@@ -19,6 +24,7 @@ export const ResultsSection = ({
   conversation,
   conversationMode,
   setConversationMode,
+  latency,
 }: Props) => {
   const hasResponse = lastAIResponse || isAIProcessing;
   const hasHistory = conversation.messages.length > 2;
@@ -39,6 +45,20 @@ export const ResultsSection = ({
           <h4 className="text-xs font-medium">
             {conversationMode ? "Conversation" : "AI Response"}
           </h4>
+          {latency.firstToken !== undefined && (
+            <span
+              className="text-[9px] text-muted-foreground/60 tabular-nums"
+              title="Speech to text, then time to first answer word, then total"
+            >
+              {[
+                formatSeconds(latency.stt) && `STT ${formatSeconds(latency.stt)}`,
+                `first word ${formatSeconds(latency.firstToken)}`,
+                formatSeconds(latency.total) && `total ${formatSeconds(latency.total)}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2 select-none">
           <span className="text-[9px] text-muted-foreground/50 bg-muted/50 px-1 rounded">
@@ -137,7 +157,7 @@ export const ResultsSection = ({
               </p>
               <div className="space-y-1.5 max-h-40 overflow-y-auto">
                 {conversation.messages
-                  .slice(2)
+                  .slice(0, -2)
                   .sort((a, b) => b.timestamp - a.timestamp)
                   .map((message, index) => (
                     <div

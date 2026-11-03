@@ -5,11 +5,10 @@ Provides a FastAPI endpoint that accepts audio files and returns transcriptions.
 
 import os
 import sys
+import io
 import logging
-import tempfile
 import secrets
 import asyncio
-from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,7 +46,11 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1
 
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 MAX_REQUEST_BYTES = MAX_AUDIO_BYTES + 64 * 1024
+# Requests are transcribed one at a time in arrival order. A short queue absorbs
+# back-to-back utterances instead of dropping them; beyond it we shed load.
+MAX_QUEUED_REQUESTS = 4
 _transcription_lock = asyncio.Lock()
+_queued_requests = 0
 
 
 class RequestGuard:
@@ -92,6 +95,12 @@ def get_model():
         return _model
 
     from faster_whisper import WhisperModel
+
+    # CUDA is never available on macOS; skip the slow failed attempt there.
+    if sys.platform == "darwin":
+        _model = WhisperModel(_model_name, device="cpu", compute_type=_compute_type)
+        logger.info("Model loaded successfully on CPU.")
+        return _model
 
     # Try CUDA first, fall back to CPU
     device = "cuda"
@@ -169,33 +178,30 @@ async def transcribe(
 
         logger.info("Received audio (%d bytes)", len(audio_bytes))
 
-        # Write to a temporary file (faster-whisper needs a file path or file-like object)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
+        def run_transcription():
+            # Greedy decoding without cross-segment conditioning: much faster on
+            # CPU and avoids hallucinated carry-over between utterances.
+            segments, _ = get_model().transcribe(
+                io.BytesIO(audio_bytes),
+                language=language or None,
+                beam_size=1,
+                condition_on_previous_text=False,
+                vad_filter=True,
+            )
+            return " ".join(segment.text.strip() for segment in segments).strip()
 
+        global _queued_requests
+        if _queued_requests >= MAX_QUEUED_REQUESTS:
+            raise HTTPException(status_code=429, detail="Transcription is busy")
+        _queued_requests += 1
         try:
-            def run_transcription():
-                segments, _ = get_model().transcribe(
-                    tmp_path, language=language or None, beam_size=5, vad_filter=True,
-                )
-                return " ".join(segment.text.strip() for segment in segments).strip()
-
-            # Reject concurrent expensive work instead of queuing unbounded requests.
-            if _transcription_lock.locked():
-                raise HTTPException(status_code=429, detail="Transcription is busy")
             async with _transcription_lock:
                 transcription = await run_in_threadpool(run_transcription)
-            logger.info("Transcription complete")
-
-            return JSONResponse(content={"text": transcription})
-
         finally:
-            # Clean up temp file
-            try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+            _queued_requests -= 1
+        logger.info("Transcription complete")
+
+        return JSONResponse(content={"text": transcription})
 
     except HTTPException:
         raise

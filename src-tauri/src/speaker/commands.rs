@@ -418,6 +418,25 @@ fn normalize_audio_level(samples: &[f32], target_rms: f32) -> Vec<f32> {
         .collect()
 }
 
+const STT_SAMPLE_RATE: u32 = 16_000;
+
+// Downsample by averaging each output sample's source window (a box low-pass
+// filter, adequate for speech). Never upsamples.
+fn resample_to(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate <= to_rate {
+        return samples.to_vec();
+    }
+    let ratio = from_rate as f64 / to_rate as f64;
+    let out_len = (samples.len() as f64 / ratio) as usize;
+    (0..out_len)
+        .map(|i| {
+            let start = (i as f64 * ratio) as usize;
+            let end = (((i + 1) as f64 * ratio) as usize).min(samples.len()).max(start + 1);
+            samples[start..end].iter().sum::<f32>() / (end - start) as f32
+        })
+        .collect()
+}
+
 // Convert samples to WAV base64 (with proper error handling)
 fn samples_to_wav_b64(sample_rate: u32, mono_f32: &[f32]) -> Result<String, String> {
     // Validate sample rate
@@ -433,6 +452,11 @@ fn samples_to_wav_b64(sample_rate: u32, mono_f32: &[f32]) -> Result<String, Stri
     if mono_f32.is_empty() {
         return Err("Empty audio buffer".to_string());
     }
+
+    // Speech models work at 16 kHz; sending device-rate audio (often 48 kHz)
+    // only triples the payload and the provider's decode time.
+    let resampled = resample_to(mono_f32, sample_rate, STT_SAMPLE_RATE);
+    let (mono_f32, sample_rate) = (resampled.as_slice(), STT_SAMPLE_RATE.min(sample_rate));
 
     let mut cursor = Cursor::new(Vec::new());
     let spec = WavSpec {

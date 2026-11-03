@@ -1,7 +1,7 @@
 import { useApp } from "@/contexts";
 import { Header } from "@/components";
 
-export const PluelyApiSetup = () => {
+export const ProviderStatus = () => {
   const { selectedAIProvider, allAiProviders, selectedSttProvider, allSttProviders } = useApp();
 
   const currentAiProvider = allAiProviders.find((p) => p.id === selectedAIProvider.provider);
@@ -13,7 +13,7 @@ export const PluelyApiSetup = () => {
   const sttName = currentSttProvider?.id || "Not configured";
 
   return (
-    <div id="pluely-api" className="space-y-3 -mt-2">
+    <div id="provider-status" className="space-y-3 -mt-2">
       <div className="space-y-2 pt-2">
         <Header
           title="Provider Status"

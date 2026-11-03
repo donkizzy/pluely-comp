@@ -11,7 +11,8 @@ For a standalone instance, set `TRANSCRIPTION_TOKEN` to a random secret before
 running `main.py`. Every request except CORS preflights requires an
 `Authorization: Bearer <token>` header, including `/health`. API documentation
 routes are disabled. Audio uploads are limited to 25 MiB, with one transcription
-running at a time. Audio and transcripts are not logged.
+running at a time; up to 4 requests queue in arrival order and further requests
+get `429`. Audio and transcripts are not logged.
 
 `requirements.in` lists the direct dependencies; `requirements.txt` pins the
 resolved dependency tree and hashes. Re-resolve and audit that tree when updating
