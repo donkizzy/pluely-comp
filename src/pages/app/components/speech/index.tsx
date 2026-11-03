@@ -19,6 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ModeSwitcher } from "./ModeSwitcher";
 import { RecordingPanel } from "./RecordingPanel";
 import { ResultsSection } from "./ResultsSection";
+import { LiveTranscript } from "./LiveTranscript";
 import { SettingsPanel } from "./SettingsPanel";
 import { PermissionFlow } from "./PermissionFlow";
 import { QuickActions } from "./QuickActions";
@@ -34,6 +35,14 @@ export const SystemAudio = (props: useSystemAudioType) => {
     isAIProcessing,
     lastTranscription,
     latency,
+    transcript,
+    pendingText,
+    answerTranscriptEntry,
+    answerLatest,
+    autoAnswerMode,
+    setAutoAnswerMode,
+    answerStyle,
+    setAnswerStyle,
     lastAIResponse,
     error,
     setupRequired,
@@ -88,11 +97,17 @@ export const SystemAudio = (props: useSystemAudioType) => {
         e.preventDefault();
         setConversationMode((prev) => !prev);
       }
+
+      // Cmd+Enter or Ctrl+Enter to answer the latest thing said
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && capturing) {
+        e.preventDefault();
+        if (!isAIProcessing) answerLatest();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isPopoverOpen]);
+  }, [isPopoverOpen, capturing, isAIProcessing, answerLatest]);
 
   // Reset screenshot when processing starts (message is being sent)
   useEffect(() => {
@@ -347,6 +362,21 @@ export const SystemAudio = (props: useSystemAudioType) => {
                       onStopAndSend={manualStopAndSend}
                       onIgnore={ignoreContinuousRecording}
                     />
+
+                    {/* Live Transcript */}
+                    {isVadMode && (
+                      <LiveTranscript
+                        transcript={transcript}
+                        pendingText={pendingText}
+                        isAIProcessing={isAIProcessing}
+                        autoAnswerMode={autoAnswerMode}
+                        setAutoAnswerMode={setAutoAnswerMode}
+                        answerStyle={answerStyle}
+                        setAnswerStyle={setAnswerStyle}
+                        onAnswer={answerTranscriptEntry}
+                        onAnswerLatest={answerLatest}
+                      />
+                    )}
 
                     {/* AI Response */}
                     <ResultsSection

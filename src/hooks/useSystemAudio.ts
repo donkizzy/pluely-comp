@@ -18,6 +18,13 @@ import {
   generateMessageId,
 } from "@/lib";
 import { Message } from "@/types/completion";
+import {
+  AnswerStyle,
+  QuestionType,
+  buildAnswerGuidance,
+  classifyQuestion,
+  isLikelyQuestion,
+} from "@/lib/interview";
 
 // VAD Configuration interface matching Rust
 export interface VadConfig {
@@ -70,6 +77,30 @@ export interface TurnLatency {
   total?: number;
 }
 
+// When to answer automatically: only on detected questions, after every
+// utterance, or only when the user asks.
+export type AutoAnswerMode = "question" | "every" | "manual";
+
+export interface TranscriptEntry {
+  id: string;
+  text: string;
+  at: number;
+  isQuestion: boolean;
+  questionType: QuestionType;
+  answered: boolean;
+}
+
+// Speech segments closer together than this are one turn (an interviewer
+// pausing mid-question). A new speech start holds the turn open.
+const TURN_MERGE_MS = 700;
+const AUTO_ANSWER_KEY = "system_audio_auto_answer";
+const ANSWER_STYLE_KEY = "system_audio_answer_style";
+
+const loadSetting = <T extends string>(key: string, allowed: T[], fallback: T) => {
+  const saved = safeLocalStorage.getItem(key) as T | null;
+  return saved && allowed.includes(saved) ? saved : fallback;
+};
+
 export type useSystemAudioType = ReturnType<typeof useSystemAudio>;
 
 export function useSystemAudio() {
@@ -114,6 +145,18 @@ export function useSystemAudio() {
     selectedAudioDevices,
   } = useApp();
   const [latency, setLatency] = useState<TurnLatency>({});
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const [pendingText, setPendingText] = useState("");
+  const [autoAnswerMode, setAutoAnswerModeState] = useState<AutoAnswerMode>(
+    () => loadSetting(AUTO_ANSWER_KEY, ["question", "every", "manual"], "question")
+  );
+  const [answerStyle, setAnswerStyleState] = useState<AnswerStyle>(() =>
+    loadSetting(ANSWER_STYLE_KEY, ["points", "short", "full"], "points")
+  );
+  // Transcribed segments waiting to be merged into one turn.
+  const pendingTurnRef = useRef<{ texts: string[]; startedAt: number; stt: number } | null>(null);
+  const turnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finishTurnRef = useRef<() => void>(() => {});
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
   // Transcriptions run one at a time, in arrival order, so utterances are never
@@ -125,8 +168,14 @@ export function useSystemAudio() {
   const handleSpeechRef = useRef<
     (base64Audio: string, receivedAt: number) => Promise<void>
   >(async () => {});
+  const isContinuousModeRef = useRef(isContinuousMode);
+  const autoAnswerModeRef = useRef(autoAnswerMode);
+  const answerStyleRef = useRef(answerStyle);
   capturingRef.current = capturing;
   conversationRef.current = conversation;
+  isContinuousModeRef.current = isContinuousMode;
+  autoAnswerModeRef.current = autoAnswerMode;
+  answerStyleRef.current = answerStyle;
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSavingRef = useRef<boolean>(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -279,31 +328,34 @@ export function useSystemAudio() {
       // Capture may have been stopped while we were transcribing.
       if (!capturingRef.current) return;
 
+      // Noise or silence: nothing to add, but let a pending turn finish.
       if (!transcription.trim()) {
-        setError("Received empty transcription");
+        scheduleTurnEnd();
         return;
       }
-
-      setLastTranscription(transcription);
       setError("");
 
-      const effectiveSystemPrompt = useSystemPrompt
-        ? systemPrompt || DEFAULT_SYSTEM_PROMPT
-        : contextContent || DEFAULT_SYSTEM_PROMPT;
+      const stt = performance.now() - receivedAt;
+      const pending = pendingTurnRef.current;
+      if (pending) {
+        pending.texts.push(transcription.trim());
+        pending.stt = stt;
+      } else {
+        pendingTurnRef.current = {
+          texts: [transcription.trim()],
+          startedAt: receivedAt,
+          stt,
+        };
+      }
+      setPendingText(pendingTurnRef.current!.texts.join(" "));
 
-      const previousMessages = conversationRef.current.messages.map((msg) => ({
-        role: msg.role,
-        content: msg.content,
-      }));
-
-      // Not awaited: the next utterance can be transcribed while this answer
-      // streams. A newer answer aborts this one.
-      void processWithAI(
-        transcription,
-        effectiveSystemPrompt,
-        previousMessages,
-        { startedAt: receivedAt, stt: performance.now() - receivedAt }
-      );
+      // A manual stop-and-send is always a complete turn; so is an explicit
+      // question mark. Otherwise wait briefly in case the speaker continues.
+      if (!isContinuousModeRef.current && !transcription.trim().endsWith("?")) {
+        scheduleTurnEnd();
+      } else {
+        finishTurnRef.current();
+      }
     } catch (sttError: any) {
       console.error("STT Error:", sttError);
       setError(sttError.message || "Failed to transcribe audio");
@@ -313,6 +365,96 @@ export function useSystemAudio() {
       setIsProcessing(false);
     }
   };
+
+  const clearTurnTimer = () => {
+    if (turnTimerRef.current) clearTimeout(turnTimerRef.current);
+    turnTimerRef.current = null;
+  };
+
+  const scheduleTurnEnd = () => {
+    clearTurnTimer();
+    if (!pendingTurnRef.current) return;
+    turnTimerRef.current = setTimeout(() => finishTurnRef.current(), TURN_MERGE_MS);
+  };
+
+  const getEffectiveSystemPrompt = () =>
+    useSystemPrompt
+      ? systemPrompt || DEFAULT_SYSTEM_PROMPT
+      : contextContent || DEFAULT_SYSTEM_PROMPT;
+
+  // Answer one transcript turn, with guidance for its question type.
+  const answerTurn = (
+    entry: TranscriptEntry,
+    timing: { startedAt: number; stt?: number } = { startedAt: performance.now() }
+  ) => {
+    setTranscript((prev) =>
+      prev.map((e) => (e.id === entry.id ? { ...e, answered: true } : e))
+    );
+    setLastTranscription(entry.text);
+    const prompt = `${getEffectiveSystemPrompt()}\n\n${buildAnswerGuidance(
+      entry.questionType,
+      answerStyleRef.current
+    )}`;
+    const previousMessages = conversationRef.current.messages.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    }));
+    // Not awaited: the next utterance can be transcribed while this answer
+    // streams. A newer answer aborts this one.
+    void processWithAI(entry.text, prompt, previousMessages, timing);
+  };
+
+  // Close the pending turn: record it and answer it if the mode says so.
+  finishTurnRef.current = () => {
+    clearTurnTimer();
+    const pending = pendingTurnRef.current;
+    pendingTurnRef.current = null;
+    setPendingText("");
+    if (!pending || !capturingRef.current) return;
+
+    const text = pending.texts.join(" ");
+    const isQuestion = isLikelyQuestion(text);
+    const entry: TranscriptEntry = {
+      id: generateMessageId("user", Date.now()),
+      text,
+      at: Date.now(),
+      isQuestion,
+      questionType: classifyQuestion(text),
+      answered: false,
+    };
+    setTranscript((prev) => [...prev, entry]);
+
+    const mode = autoAnswerModeRef.current;
+    const shouldAnswer =
+      isContinuousModeRef.current ||
+      mode === "every" ||
+      (mode === "question" && isQuestion);
+    if (shouldAnswer) {
+      answerTurn(entry, { startedAt: pending.startedAt, stt: pending.stt });
+    }
+  };
+
+  // While the speaker keeps talking, hold the current turn open.
+  useEffect(() => {
+    let cancelled = false;
+    const unlisteners: (() => void)[] = [];
+    const register = async () => {
+      const fns = await Promise.all([
+        listen("speech-start", () => clearTurnTimer()),
+        listen("speech-discarded", () => scheduleTurnEnd()),
+      ]);
+      if (cancelled) fns.forEach((fn) => fn());
+      else unlisteners.push(...fns);
+    };
+    register().catch((err) =>
+      console.error("Failed to set up speech turn listeners:", err)
+    );
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+      clearTurnTimer();
+    };
+  }, []);
 
   // Register the speech listener once for the hook's lifetime.
   useEffect(() => {
@@ -409,6 +551,35 @@ export function useSystemAudio() {
     [quickActions, saveQuickActions]
   );
 
+  const setAutoAnswerMode = useCallback((mode: AutoAnswerMode) => {
+    setAutoAnswerModeState(mode);
+    safeLocalStorage.setItem(AUTO_ANSWER_KEY, mode);
+  }, []);
+
+  const setAnswerStyle = useCallback((style: AnswerStyle) => {
+    setAnswerStyleState(style);
+    safeLocalStorage.setItem(ANSWER_STYLE_KEY, style);
+  }, []);
+
+  // Answer a transcript line on demand ("Answer this").
+  const answerTranscriptEntry = (id: string) => {
+    const entry = transcript.find((e) => e.id === id);
+    if (entry) answerTurn(entry);
+  };
+
+  // Answer the most recent turn, finishing it first if still pending.
+  const answerLatest = () => {
+    if (pendingTurnRef.current) {
+      const previousMode = autoAnswerModeRef.current;
+      autoAnswerModeRef.current = "every";
+      finishTurnRef.current();
+      autoAnswerModeRef.current = previousMode;
+      return;
+    }
+    const latest = transcript[transcript.length - 1];
+    if (latest) answerTurn(latest);
+  };
+
   const handleQuickActionClick = async (action: string) => {
     setError("");
 
@@ -416,18 +587,30 @@ export function useSystemAudio() {
       ? systemPrompt || DEFAULT_SYSTEM_PROMPT
       : contextContent || DEFAULT_SYSTEM_PROMPT;
 
-    // Include the most recent transcription in conversation history if it exists
+    // Include what was said since the last answer (or, failing that, the last
+    // transcription) in the conversation history.
     let updatedMessages = [...conversation.messages];
+    const lastAnsweredIndex = transcript.map((e) => e.answered).lastIndexOf(true);
+    const unanswered = transcript
+      .slice(lastAnsweredIndex + 1)
+      .map((e) => e.text)
+      .join(" ");
+    const recentSpeech = unanswered || lastTranscription;
+    if (unanswered) {
+      setTranscript((prev) =>
+        prev.map((e, i) => (i > lastAnsweredIndex ? { ...e, answered: true } : e))
+      );
+    }
 
-    if (lastTranscription && lastTranscription.trim()) {
+    if (recentSpeech && recentSpeech.trim()) {
       const lastMessage = updatedMessages[updatedMessages.length - 1];
       // Only add if it's not already the last message
-      if (!lastMessage || lastMessage.content !== lastTranscription) {
+      if (!lastMessage || lastMessage.content !== recentSpeech) {
         const timestamp = Date.now();
         const userMessage = {
           id: generateMessageId("user", timestamp),
           role: "user" as const,
-          content: lastTranscription,
+          content: recentSpeech,
           timestamp,
         };
         updatedMessages.push(userMessage);
@@ -437,7 +620,7 @@ export function useSystemAudio() {
           ...prev,
           messages: [...prev.messages, userMessage],
           updatedAt: timestamp,
-          title: prev.title || generateConversationTitle(lastTranscription),
+          title: prev.title || generateConversationTitle(recentSpeech),
         }));
       }
     }
@@ -606,6 +789,7 @@ export function useSystemAudio() {
       const isContinuous = !vadConfig.enabled;
 
       // Set up conversation
+      setTranscript([]);
       const conversationId = generateConversationId("sysaudio");
       setConversation({
         id: conversationId,
@@ -669,6 +853,9 @@ export function useSystemAudio() {
       setLastAIResponse("");
       setError("");
       setIsPopoverOpen(false);
+      clearTurnTimer();
+      pendingTurnRef.current = null;
+      setPendingText("");
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(`Failed to stop capture: ${errorMessage}`);
@@ -813,6 +1000,10 @@ export function useSystemAudio() {
       createdAt: 0,
       updatedAt: 0,
     });
+    setTranscript([]);
+    clearTurnTimer();
+    pendingTurnRef.current = null;
+    setPendingText("");
     setLastTranscription("");
     setLastAIResponse("");
     setError("");
@@ -939,6 +1130,15 @@ export function useSystemAudio() {
     // AI processing
     processWithAI,
     latency,
+    // Live transcript and answering
+    transcript,
+    pendingText,
+    answerTranscriptEntry,
+    answerLatest,
+    autoAnswerMode,
+    setAutoAnswerMode,
+    answerStyle,
+    setAnswerStyle,
     // Context management
     useSystemPrompt,
     setUseSystemPrompt: updateUseSystemPrompt,
