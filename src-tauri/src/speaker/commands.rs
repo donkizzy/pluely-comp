@@ -63,18 +63,44 @@ pub async fn start_system_audio_capture(
 ) -> Result<(), String> {
     let state = app.state::<crate::AudioState>();
 
-    // Check if already capturing (atomic check)
+    // Reserve the capture slot atomically. Device setup below takes time, so
+    // checking without reserving would let concurrent starts all pass and
+    // leave orphaned capture tasks that can never be stopped.
     {
-        let guard = state
+        let mut capturing = state
+            .is_capturing
+            .lock()
+            .map_err(|e| format!("Failed to acquire capture lock: {}", e))?;
+        let task_running = state
             .stream_task
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-
-        if guard.is_some() {
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .is_some();
+        if *capturing || task_running {
             warn!("Capture already running");
             return Err("Capture already running".to_string());
         }
+        *capturing = true;
     }
+
+    let result = start_capture_task(&app, vad_config, device_id, streaming);
+    if result.is_err() {
+        if let Ok(mut capturing) = state.is_capturing.lock() {
+            *capturing = false;
+        }
+    }
+    result
+}
+
+// Sets up the device and spawns the capture task. The caller has already
+// reserved the capture slot.
+fn start_capture_task(
+    app: &AppHandle,
+    vad_config: Option<VadConfig>,
+    device_id: Option<String>,
+    streaming: Option<StreamingSttConfig>,
+) -> Result<(), String> {
+    let state = app.state::<crate::AudioState>();
 
     // Update VAD config if provided
     if let Some(config) = vad_config {
@@ -109,12 +135,6 @@ pub async fn start_system_audio_capture(
         .map_err(|e| format!("Failed to read VAD config: {}", e))?
         .clone();
 
-    // Mark as capturing BEFORE spawning task
-    *state
-        .is_capturing
-        .lock()
-        .map_err(|e| format!("Failed to set capturing state: {}", e))? = true;
-
     // Emit capture started event
     let _ = app_clone.emit("capture-started", sr);
 
@@ -133,6 +153,9 @@ pub async fn start_system_audio_capture(
         {
             if let Ok(mut guard) = state.stream_task.lock() {
                 *guard = None;
+            };
+            if let Ok(mut capturing) = state.is_capturing.lock() {
+                *capturing = false;
             };
         }
     });

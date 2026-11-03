@@ -13,6 +13,11 @@ let globalEventListeners: {
   registrationError?: UnlistenFn;
 } = {};
 
+// Setup runs are chained so concurrent hook instances (and StrictMode's
+// double effects) replace the listeners one at a time instead of each
+// registering their own set.
+let listenerSetupChain: Promise<void> = Promise.resolve();
+
 // Global debounce for screenshot events to prevent duplicates
 let lastScreenshotEventTime = 0;
 
@@ -252,7 +257,7 @@ export const useGlobalShortcuts = () => {
       }
     };
 
-    setupEventListeners();
+    listenerSetupChain = listenerSetupChain.then(setupEventListeners);
   }, []);
 
   return {
