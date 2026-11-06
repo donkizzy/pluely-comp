@@ -8,15 +8,23 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::Duration;
 use tracing::error;
-use wasapi::{get_default_device, DeviceCollection, Direction, SampleType, StreamMode, WaveFormat};
+use wasapi::{initialize_mta, DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
+
+// COM must be initialised on every thread that touches WASAPI. A thread already
+// in an STA (e.g. the webview's) reports RPC_E_CHANGED_MODE but can still use COM.
+fn device_enumerator() -> Result<DeviceEnumerator> {
+    let _ = initialize_mta();
+    Ok(DeviceEnumerator::new()?)
+}
 
 pub fn get_input_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = Vec::new();
 
-    let default_device = get_default_device(&Direction::Capture).ok();
+    let enumerator = device_enumerator()?;
+    let default_device = enumerator.get_default_device(&Direction::Capture).ok();
     let default_id = default_device.as_ref().and_then(|d| d.get_id().ok());
 
-    let collection = DeviceCollection::new(&Direction::Capture)?;
+    let collection = enumerator.get_device_collection(&Direction::Capture)?;
     let count = collection.get_nbr_devices()?;
 
     for i in 0..count {
@@ -43,10 +51,11 @@ pub fn get_input_devices() -> Result<Vec<AudioDevice>> {
 pub fn get_output_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = Vec::new();
 
-    let default_device = get_default_device(&Direction::Render).ok();
+    let enumerator = device_enumerator()?;
+    let default_device = enumerator.get_default_device(&Direction::Render).ok();
     let default_id = default_device.as_ref().and_then(|d| d.get_id().ok());
 
-    let collection = DeviceCollection::new(&Direction::Render)?;
+    let collection = enumerator.get_device_collection(&Direction::Render)?;
     let count = collection.get_nbr_devices()?;
 
     for i in 0..count {
@@ -71,7 +80,9 @@ pub fn get_output_devices() -> Result<Vec<AudioDevice>> {
 }
 
 fn find_device_by_id(direction: &Direction, device_id: &str) -> Option<wasapi::Device> {
-    let collection = match DeviceCollection::new(direction) {
+    let collection = match device_enumerator()
+        .and_then(|enumerator| Ok(enumerator.get_device_collection(direction)?))
+    {
         Ok(c) => c,
         Err(e) => {
             error!(
@@ -189,6 +200,7 @@ impl SpeakerStream {
         device_id: Option<String>,
     ) -> Result<()> {
         let init_result = (|| -> Result<_> {
+            let enumerator = device_enumerator()?;
             let device = match device_id {
                 Some(ref id) => match find_device_by_id(&Direction::Render, id) {
                     Some(d) => {
@@ -197,11 +209,9 @@ impl SpeakerStream {
                             .unwrap_or_else(|_| "Unknown".to_string());
                         d
                     }
-                    None => {
-                        get_default_device(&Direction::Render).expect("No default render device")
-                    }
+                    None => enumerator.get_default_device(&Direction::Render)?,
                 },
-                None => get_default_device(&Direction::Render)?,
+                None => enumerator.get_default_device(&Direction::Render)?,
             };
 
             let device_name = device
