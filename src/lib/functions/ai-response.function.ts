@@ -139,10 +139,10 @@ export async function* fetchAIResponse(params: {
     };
 
     bodyObj = deepVariableReplacer(bodyObj, allVariables);
-    let url = deepVariableReplacer(curlJson.url || "", allVariables);
+    const url = deepVariableReplacer(curlJson.url || "", allVariables);
 
-    const headers = deepVariableReplacer(curlJson.header || {}, allVariables);
-    headers["Content-Type"] = "application/json";
+    const headers = new Headers(deepVariableReplacer(curlJson.header || {}, allVariables));
+    headers.set("Content-Type", "application/json");
 
     if (provider?.streaming) {
       if (typeof bodyObj === "object" && bodyObj !== null) {
@@ -157,11 +157,10 @@ export async function* fetchAIResponse(params: {
       }
     }
 
-    const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
-
     let response;
     try {
-      response = await fetchFunction(url, {
+      // Provider requests run through Tauri because the webview CSP blocks them.
+      response = await tauriFetch(url, {
         method: curlJson.method || "POST",
         headers,
         body: curlJson.method === "GET" ? undefined : JSON.stringify(bodyObj),
@@ -175,9 +174,13 @@ export async function* fetchAIResponse(params: {
       ) {
         return; // Silently return on abort
       }
-      yield `Network error during API request: ${
-        fetchError instanceof Error ? fetchError.message : "Unknown error"
-      }`;
+      const detail =
+        fetchError instanceof Error ? fetchError.message : String(fetchError);
+      throw new Error(`Network error during API request: ${detail}`);
+    }
+
+    if (signal?.aborted) {
+      await response.body?.cancel().catch(() => {});
       return;
     }
 
@@ -186,10 +189,9 @@ export async function* fetchAIResponse(params: {
       try {
         errorText = await response.text();
       } catch {}
-      yield `API request failed: ${response.status} ${response.statusText}${
+      throw new Error(`API request failed: ${response.status} ${response.statusText}${
         errorText ? ` - ${errorText}` : ""
-      }`;
-      return;
+      }`);
     }
 
     if (!provider?.streaming) {
@@ -197,10 +199,9 @@ export async function* fetchAIResponse(params: {
       try {
         json = await response.json();
       } catch (parseError) {
-        yield `Failed to parse non-streaming response: ${
+        throw new Error(`Failed to parse non-streaming response: ${
           parseError instanceof Error ? parseError.message : "Unknown error"
-        }`;
-        return;
+        }`);
       }
       const content =
         getByPath(json, provider?.responseContentPath || "") || "";
@@ -209,74 +210,51 @@ export async function* fetchAIResponse(params: {
     }
 
     if (!response.body) {
-      yield "Streaming not supported or response body missing";
-      return;
+      throw new Error("Streaming not supported or response body missing");
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
 
-    while (true) {
-      // Check if aborted
-      if (signal?.aborted) {
-        reader.cancel();
-        return;
-      }
+    try {
+      while (!signal?.aborted) {
+        const { done, value } = await reader.read();
+        if (done || signal?.aborted) break;
 
-      let readResult;
-      try {
-        readResult = await reader.read();
-      } catch (readError) {
-        // Check if aborted
-        if (
-          signal?.aborted ||
-          (readError instanceof Error && readError.name === "AbortError")
-        ) {
-          return; // Silently return on abort
-        }
-        yield `Error reading stream: ${
-          readError instanceof Error ? readError.message : "Unknown error"
-        }`;
-        return;
-      }
-      const { done, value } = readResult;
-      if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      // Check if aborted before processing
-      if (signal?.aborted) {
-        reader.cancel();
-        return;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (line.startsWith("data:")) {
-          const trimmed = line.substring(5).trim();
-          if (!trimmed || trimmed === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(trimmed);
-            const delta = getStreamingContent(
-              parsed,
-              provider?.responseContentPath || ""
-            );
-            if (delta) {
-              yield delta;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("data:")) {
+            const trimmed = line.substring(5).trim();
+            if (!trimmed || trimmed === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(trimmed);
+              const delta = getStreamingContent(
+                parsed,
+                provider?.responseContentPath || ""
+              );
+              if (delta) {
+                yield delta;
+              }
+            } catch {
+              // Ignore parsing errors for partial JSON chunks
             }
-          } catch (e) {
-            // Ignore parsing errors for partial JSON chunks
           }
         }
       }
+    } catch (readError) {
+      if (readError instanceof Error && readError.name === "AbortError") return;
+      const detail =
+        readError instanceof Error ? readError.message : String(readError);
+      throw new Error(`Error reading stream: ${detail}`);
+    } finally {
+      await reader.cancel().catch(() => {});
     }
   } catch (error) {
-    throw new Error(
-      `Error in fetchAIResponse: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`
-    );
+    if (params.signal?.aborted) return;
+    throw error;
   }
 }

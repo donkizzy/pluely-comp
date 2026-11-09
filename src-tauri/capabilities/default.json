@@ -27,10 +27,10 @@
       "identifier": "http:default",
       "allow": [
         {
-          "url": "http://**"
+          "url": "http://**:*"
         },
         {
-          "url": "https://**"
+          "url": "https://**:*"
         }
       ]
     }
