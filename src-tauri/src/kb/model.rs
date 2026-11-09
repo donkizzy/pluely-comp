@@ -37,8 +37,16 @@ pub fn embed(root: &Path, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
             .map_err(|e| format!("Local embeddings: {e}"))?,
         );
     }
-    lock.as_mut()
-        .ok_or("Embedding engine unavailable")?
-        .embed(texts, Some(16))
-        .map_err(|e| e.to_string())
+    let model = lock.as_mut().ok_or("Embedding engine unavailable")?;
+    // Dynamic quantization scales activations per batch, so fastembed rejects
+    // any batch smaller than the input ("cannot be used with batching") and
+    // vectors from different batches would not be comparable. Embed each text
+    // on its own, exactly as search embeds a query, so stored chunks and
+    // queries always share the same scale.
+    let mut vectors = Vec::with_capacity(texts.len());
+    for text in texts {
+        let mut out = model.embed(vec![text], None).map_err(|e| e.to_string())?;
+        vectors.push(out.pop().ok_or("Local embeddings returned no vector")?);
+    }
+    Ok(vectors)
 }

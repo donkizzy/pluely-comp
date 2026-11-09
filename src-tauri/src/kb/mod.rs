@@ -327,4 +327,34 @@ mod tests {
             .is_empty());
         assert!(search(&db, &root(), "", 20, &[]).is_ok());
     }
+    #[test]
+    fn indexes_a_full_resume_longer_than_one_batch() {
+        // Regression: more than 16 chunks failed with fastembed's
+        // "Dynamic quantization cannot be used with batching".
+        let mut db = setup();
+        let mut content = String::from(
+            "Led the migration of payment services to Kubernetes, cutting cloud costs by 30%.\n",
+        );
+        for n in 0..60 {
+            content.push_str(&format!(
+                "Role {n}: maintained internal tooling, wrote documentation and reviewed code.\n"
+            ));
+        }
+        let doc = Document {
+            id: "resume".into(),
+            kind: "resume".into(),
+            title: "Resume".into(),
+            source_uri: None,
+            content,
+            include_in_context: true,
+        };
+        assert!(text::chunk(&doc.content).len() > 16);
+        index(&mut db, &root(), &doc, None).unwrap();
+        let stored: i64 = db
+            .query_row("SELECT count(*) FROM chunks WHERE document_id='resume' AND embedding IS NOT NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored as usize, text::chunk(&doc.content).len());
+        let hits = search(&db, &root(), "How did you reduce infrastructure spending?", 3, &[]).unwrap();
+        assert!(hits[0].text.contains("Kubernetes"), "top hit: {}", hits[0].text);
+    }
 }
