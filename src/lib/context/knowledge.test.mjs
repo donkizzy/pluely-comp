@@ -11,7 +11,7 @@ import {
   saveStory,
   parseStoryDrafts,
 } from "../database/stories.action.ts";
-let db, disk, hits, fail, delay;
+let db, disk, hits, fail, delay, slowSearch;
 globalThis.window = globalThis;
 beforeEach(() => {
   db = new DatabaseSync(":memory:");
@@ -19,6 +19,7 @@ beforeEach(() => {
   hits = [];
   fail = false;
   delay = false;
+  slowSearch = false;
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     value: {
@@ -53,7 +54,8 @@ beforeEach(() => {
       const r = db.prepare(args.query).run(...(args.values ?? []));
       return [Number(r.changes), Number(r.lastInsertRowid)];
     }
-    if (command === "kb_search") return hits;
+    if (command === "kb_search")
+      return slowSearch ? new Promise(() => {}) : hits;
     throw new Error(`Unexpected command ${command}`);
   });
 });
@@ -280,4 +282,18 @@ test("an excluded active session exposes neither prep pack nor session details",
   assert.equal(result.prepPack, undefined);
   assert.ok(!result.systemPromptAddendum.includes("PRIVATE CO"));
   assert.ok(!result.keyterms.includes("PRIVATE CO"));
+});
+
+test("a stalled search still sends the profile instead of dropping all context", async () => {
+  await saveProfile({
+    ...emptyProfile,
+    includeInContext: true,
+    name: "Ada",
+    summary: "Builds payment systems.",
+  });
+  slowSearch = true;
+  const result = await buildInterviewContext({ question: "Tell me about yourself" });
+  assert.match(result.systemPromptAddendum, /Name: Ada/);
+  assert.match(result.systemPromptAddendum, /Builds payment systems/);
+  assert.ok(!result.systemPromptAddendum.includes("Never say"));
 });

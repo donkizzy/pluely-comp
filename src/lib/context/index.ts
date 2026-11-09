@@ -60,3 +60,18 @@ export async function buildInterviewContext(
     if (timer !== undefined) clearTimeout(timer);
   }
 }
+
+/**
+ * The user's system prompt plus the personalization addendum for this
+ * question (empty unless the profile, a source or the active session is
+ * included in context). Never throws; bounded by buildInterviewContext.
+ */
+export async function personalizeSystemPrompt(
+  base: string,
+  question: string,
+): Promise<string> {
+  const { systemPromptAddendum } = await buildInterviewContext({ question });
+  return [base.trim(), systemPromptAddendum.trim()]
+    .filter(Boolean)
+    .join("\n\n");
+}

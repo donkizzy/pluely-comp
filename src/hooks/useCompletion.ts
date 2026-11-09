@@ -17,6 +17,7 @@ import {
   isScreenRecordingPermissionError,
   SCREEN_RECORDING_PERMISSION_MESSAGE,
 } from "@/lib";
+import { personalizeSystemPrompt } from "@/lib/context";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -210,11 +211,17 @@ export const useCompletion = () => {
         }));
 
         try {
+          // Include the candidate profile and resume evidence the user has
+          // chosen to share, as the live-audio answers do.
+          const fullSystemPrompt = await personalizeSystemPrompt(
+            systemPrompt || "",
+            input
+          );
           // Use the fetchAIResponse function with signal
           for await (const chunk of fetchAIResponse({
             provider: provider,
             selectedProvider: selectedAIProvider,
-            systemPrompt: systemPrompt || undefined,
+            systemPrompt: fullSystemPrompt || undefined,
             history: messageHistory,
             userMessage: input,
             imagesBase64,
@@ -612,11 +619,15 @@ export const useCompletion = () => {
               response: "",
             }));
 
+            const fullSystemPrompt = await personalizeSystemPrompt(
+              systemPrompt || "",
+              prompt
+            );
             // Use the fetchAIResponse function with image and signal
             for await (const chunk of fetchAIResponse({
               provider: provider,
               selectedProvider: selectedAIProvider,
-              systemPrompt: systemPrompt || undefined,
+              systemPrompt: fullSystemPrompt || undefined,
               history: messageHistory,
               userMessage: prompt,
               imagesBase64: [base64],

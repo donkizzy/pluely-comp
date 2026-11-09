@@ -22,8 +22,8 @@ export function profileContext(profile: Profile): string {
       profile.currentRole && `Current role: ${profile.currentRole}`,
       profile.yearsExperience && `Experience: ${profile.yearsExperience} years`,
       profile.targetRoles && `Target: ${profile.targetRoles}`,
-      `Tone: ${profile.tone}`,
-      `Never say: ${profile.neverSay}`,
+      profile.tone && `Tone: ${profile.tone}`,
+      profile.neverSay.trim() && `Never say: ${profile.neverSay}`,
       profile.summary,
     ]
       .filter(Boolean)

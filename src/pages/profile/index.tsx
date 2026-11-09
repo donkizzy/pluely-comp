@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageLayout } from "@/layouts";
 import { Button, Textarea } from "@/components";
 import { useProfile } from "@/contexts/profile.context";
@@ -11,8 +11,9 @@ import {
   type Profile,
 } from "@/lib/database/knowledge.action";
 import { buildInterviewContext } from "@/lib/context";
+import { profileContext } from "@/lib/context/policy";
 import { parseResume, resumeSections, importUrl } from "./import";
-import { Action, Field, Panel, Toggle } from "./fields";
+import { Action, Field, Panel, StatusToast, Toggle } from "./fields";
 
 export default function ProfilePage() {
   const { profile, updateProfile, error: loadError } = useProfile();
@@ -25,7 +26,32 @@ export default function ProfilePage() {
   const [notice, setNotice] = useState("");
   const [question, setQuestion] = useState("");
   const [preview, setPreview] = useState("");
-  useEffect(() => setDraft(profile), [profile]);
+  // The last profile the draft was synced from. Refreshes (another window
+  // writing localStorage, a profile-changed event) must not wipe unsaved edits
+  // such as freshly parsed resume fields.
+  const synced = useRef(profile);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(synced.current);
+  useEffect(() => {
+    setDraft((current) =>
+      JSON.stringify(current) === JSON.stringify(synced.current)
+        ? profile
+        : current,
+    );
+    synced.current = profile;
+  }, [profile]);
+  const saveDraft = async () => {
+    await updateProfile(draft);
+    synced.current = draft;
+  };
+  const reviewRef = useRef<HTMLElement>(null);
+  // Bring the review panel into view whenever a new source opens.
+  useEffect(() => {
+    if (source)
+      reviewRef.current?.scrollIntoView({ block: "start" });
+  }, [source?.id]);
+  const profileBytes = new TextEncoder().encode(
+    profileContext({ ...draft, includeInContext: true }),
+  ).length;
   const refresh = async () => setDocuments(await listDocuments());
   useEffect(() => {
     void refresh().catch((e) => setError(String(e)));
@@ -72,12 +98,14 @@ export default function ProfilePage() {
       title="Your profile"
       description="Keep your resume and evidence on this device. Choose what your AI provider can see."
     >
-      {(error || loadError) && (
-        <p role="alert" className="text-destructive">
-          {error || loadError}
-        </p>
-      )}
-      {notice && <p role="status">{notice}</p>}
+      <StatusToast
+        error={error || loadError}
+        notice={notice}
+        onDismiss={() => {
+          setError("");
+          setNotice("");
+        }}
+      />
       <Panel title="Personal details">
         <div className="grid gap-4 md:grid-cols-2">
           {field("name", "Name")}
@@ -95,22 +123,40 @@ export default function ProfilePage() {
         {field("neverSay", "Things never to say", true)}
         {field("about", "About me", true)}
         {field("summary", "Editable profile summary (keep it brief)", true)}
+        <p
+          className={
+            profileBytes > 300
+              ? "text-xs text-destructive"
+              : "text-xs text-muted-foreground"
+          }
+        >
+          {profileBytes > 300
+            ? `Only the first 300 of ${profileBytes} bytes of your profile details and summary are sent; shorten the summary so nothing is cut.`
+            : `${profileBytes}/300 bytes of profile details and summary used.`}
+        </p>
         <Toggle
           label="Include my profile summary and preferences in AI context"
           value={draft.includeInContext}
           onChange={(v) => setDraft((d) => ({ ...d, includeInContext: v }))}
         />
-        <Button
-          disabled={busy}
-          onClick={() =>
-            void run(async () => {
-              await updateProfile(draft);
-              setNotice("Profile saved on this device.");
-            })
-          }
-        >
-          Save profile
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await saveDraft();
+                setNotice("Profile saved on this device.");
+              })
+            }
+          >
+            Save profile
+          </Button>
+          {dirty && (
+            <span className="text-sm text-muted-foreground">
+              Unsaved changes
+            </span>
+          )}
+        </div>
       </Panel>
       <Panel title="Resume and structured evidence">
         <p className="text-sm text-muted-foreground">
@@ -137,21 +183,21 @@ export default function ProfilePage() {
                     content,
                     include_in_context: false,
                   });
+                  const parsed = resumeSections(content);
+                  // Replace sections the resume provides; keep the rest.
+                  // Name and summary only fill empty fields.
                   setDraft((d) => ({
                     ...d,
-                    ...resumeSections(content),
-                    summary:
-                      d.summary ||
-                      content
-                        .split(/\r?\n/)
-                        .filter(
-                          (line) =>
-                            !/salary|compensation|pay expectation/i.test(line),
-                        )
-                        .join(" ")
-                        .replace(/\s+/g, " ")
-                        .slice(0, 800),
+                    name: d.name || parsed.name,
+                    summary: d.summary || parsed.summary,
+                    experience: parsed.experience || d.experience,
+                    skills: parsed.skills || d.skills,
+                    education: parsed.education || d.education,
+                    projects: parsed.projects || d.projects,
                   }));
+                  setNotice(
+                    "Resume parsed. Review the extracted text here, check Experience, Skills, Education and Projects above, then save both.",
+                  );
                 });
               e.target.value = "";
             }}
@@ -165,11 +211,17 @@ export default function ProfilePage() {
           Structured fields are local notes. Save them as an included source to
           make them available to retrieval.
         </p>
+        {dirty && (
+          <p className="text-sm text-muted-foreground">
+            These fields have unsaved changes. Use Save profile above or Review
+            structured source to keep them.
+          </p>
+        )}
         <Action
           busy={busy}
           onClick={() =>
             void run(async () => {
-              await updateProfile(draft);
+              await saveDraft();
               setSource({
                 id: "profile-structured",
                 kind: "resume",
@@ -222,7 +274,7 @@ export default function ProfilePage() {
         </p>
       </Panel>
       {source && (
-        <Panel title="Review source">
+        <Panel title="Review source" ref={reviewRef}>
           <Field
             label="Title"
             value={source.title}
@@ -248,7 +300,11 @@ export default function ProfilePage() {
                 await saveDocument(source);
                 await refresh();
                 setSource(null);
-                setNotice("Source saved and indexed locally.");
+                setNotice(
+                  source.include_in_context
+                    ? "Source saved and indexed locally. Interview answers can use it."
+                    : 'Source saved locally but not included in AI context, so interview answers won\'t use it. Turn on "Include in AI context" under Saved sources to use it.',
+                );
               })
             }
           >

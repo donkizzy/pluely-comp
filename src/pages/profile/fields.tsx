@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode, type Ref } from "react";
 import { Input, Textarea, Button } from "@/components";
 export function Field({
   label,
@@ -35,12 +35,17 @@ export function Field({
 export function Panel({
   title,
   children,
+  ref,
 }: {
   title: string;
   children: ReactNode;
+  ref?: Ref<HTMLElement>;
 }) {
   return (
-    <section className="rounded-xl border bg-card p-5 space-y-4">
+    <section
+      ref={ref}
+      className="rounded-xl border bg-card p-5 space-y-4 scroll-mt-4"
+    >
       <h2 className="font-semibold text-lg">{title}</h2>
       {children}
     </section>
@@ -79,5 +84,47 @@ export function Action({
     <Button variant="outline" disabled={busy} onClick={onClick}>
       {children}
     </Button>
+  );
+}
+/**
+ * Page messages pinned to the bottom of the window, so the result of an action
+ * is visible wherever the page is scrolled. Errors stay until dismissed;
+ * confirmations clear themselves.
+ */
+export function StatusToast({
+  error,
+  notice,
+  onDismiss,
+}: {
+  error: string;
+  notice: string;
+  onDismiss: () => void;
+}) {
+  useEffect(() => {
+    if (error || !notice) return;
+    const timer = setTimeout(onDismiss, 6000);
+    return () => clearTimeout(timer);
+  }, [error, notice]);
+  const message = error || notice;
+  if (!message) return null;
+  return (
+    <div
+      role={error ? "alert" : "status"}
+      className={`fixed bottom-6 left-1/2 z-50 flex w-[min(36rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-lg border p-4 text-sm shadow-lg ${
+        error
+          ? "border-destructive bg-background text-destructive"
+          : "bg-background text-foreground"
+      }`}
+    >
+      <span className="flex-1">{message}</span>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={onDismiss}
+        aria-label="Dismiss message"
+      >
+        Dismiss
+      </Button>
+    </div>
   );
 }

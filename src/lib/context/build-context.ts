@@ -1,15 +1,37 @@
-import { getProfile, searchKnowledge } from "../database/knowledge.action.ts";
+import {
+  getProfile,
+  searchKnowledge,
+  type KnowledgeHit,
+} from "../database/knowledge.action.ts";
 import { listStories } from "../database/stories.action.ts";
 import { getActiveSession } from "../database/sessions.action.ts";
 import { profileContext, sourceContext, limitText } from "./policy.ts";
 import type { ContextRequest, ContextResult } from "./index";
+
+// Retrieval can stall on a cold model or behind indexing. Answer with the
+// profile and active session instead of losing all context to the caller's
+// overall deadline (45 ms in buildInterviewContext).
+const SEARCH_BUDGET_MS = 30;
+async function searchWithin(question: string, budget: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      searchKnowledge(question, 12),
+      new Promise<KnowledgeHit[]>((resolve) => {
+        timer = setTimeout(() => resolve([]), budget);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export async function assembleContext(
   req: ContextRequest,
 ): Promise<ContextResult> {
   const [profile, hits, bank, session] = await Promise.all([
     getProfile(),
-    searchKnowledge(req.question, 12),
+    searchWithin(req.question, SEARCH_BUDGET_MS),
     listStories(),
     getActiveSession(),
   ]);
