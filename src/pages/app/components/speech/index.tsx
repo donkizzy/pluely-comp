@@ -44,6 +44,7 @@ export const SystemAudio = (props: useSystemAudioType) => {
     latency,
     transcript,
     pendingText,
+    audioSilent,
     stories,
     prepPack,
     answerFromStory,
@@ -369,6 +370,7 @@ export const SystemAudio = (props: useSystemAudioType) => {
                       <LiveTranscript
                         transcript={transcript}
                         pendingText={pendingText}
+                        audioSilent={audioSilent}
                         isAIProcessing={isAIProcessing}
                         autoAnswerMode={autoAnswerMode}
                         setAutoAnswerMode={setAutoAnswerMode}

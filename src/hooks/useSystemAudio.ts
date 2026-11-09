@@ -206,6 +206,9 @@ export function useSystemAudio() {
   const [latency, setLatency] = useState<TurnLatency>({});
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [pendingText, setPendingText] = useState("");
+  // True while capture delivers only digital silence (often a missing macOS
+  // System Audio Recording permission).
+  const [audioSilent, setAudioSilent] = useState(false);
   // Verified stories relevant to the question being answered.
   const [stories, setStories] = useState<StoryCard[]>([]);
   // Saved prep pack of the active interview session, if included.
@@ -580,6 +583,9 @@ export function useSystemAudio() {
           setPendingText(pendingTurnRef.current!.texts.join(" "));
           if (text.endsWith("?")) finishTurnRef.current();
           else scheduleTurnEnd();
+        }),
+        listen<boolean>("system-audio-silent", (event) => {
+          setAudioSilent(capturingRef.current && event.payload);
         }),
         listen<string>("stt-stream-error", (event) => {
           streamingRef.current.failed = true;
@@ -1096,6 +1102,7 @@ export function useSystemAudio() {
       clearTurnTimer();
       pendingTurnRef.current = null;
       setPendingText("");
+      setAudioSilent(false);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(`Failed to stop capture: ${errorMessage}`);
@@ -1354,6 +1361,7 @@ export function useSystemAudio() {
 
   return {
     capturing,
+    audioSilent,
     isProcessing,
     isAIProcessing,
     lastTranscription,

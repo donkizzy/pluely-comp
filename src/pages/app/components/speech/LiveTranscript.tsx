@@ -9,6 +9,8 @@ type Props = {
   transcript: TranscriptEntry[];
   // Text of the turn still being spoken/merged, if any.
   pendingText: string;
+  // Capture is running but receiving pure digital silence.
+  audioSilent: boolean;
   isAIProcessing: boolean;
   autoAnswerMode: AutoAnswerMode;
   setAutoAnswerMode: (mode: AutoAnswerMode) => void;
@@ -72,6 +74,7 @@ function Segmented<T extends string>({
 export const LiveTranscript = ({
   transcript,
   pendingText,
+  audioSilent,
   isAIProcessing,
   autoAnswerMode,
   setAutoAnswerMode,
@@ -111,9 +114,18 @@ export const LiveTranscript = ({
       </div>
 
       <div ref={listRef} className="space-y-1 max-h-36 overflow-y-auto">
-        {visible.length === 0 && !pendingText && (
+        {visible.length === 0 && !pendingText && !audioSilent && (
           <p className="text-[10px] text-muted-foreground">
             Listening… the interviewer's words will appear here.
+          </p>
+        )}
+        {audioSilent && !pendingText && (
+          <p className="text-[10px] text-orange-500 leading-snug">
+            No system audio is reaching Pluely. If the call is playing, macOS is
+            blocking capture: open System Settings → Privacy &amp; Security →
+            Screen &amp; System Audio Recording and enable Pluely (or, in dev,
+            the app you launched it from, such as Terminal, Cursor or Claude),
+            then restart it.
           </p>
         )}
         {visible.map((entry) => (

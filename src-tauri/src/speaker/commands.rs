@@ -168,6 +168,9 @@ fn start_capture_task(
     Ok(())
 }
 
+// How long a new capture may deliver only digital silence before we warn the UI.
+const SILENT_AUDIO_WARN_AFTER: Duration = Duration::from_secs(8);
+
 // VAD-enabled capture - OPTIMIZED for real-time speech detection
 async fn run_vad_capture(
     app: AppHandle,
@@ -192,6 +195,9 @@ async fn run_vad_capture(
     let mut silence_chunks = 0;
     let mut speech_chunks = 0;
     let max_samples = sr as usize * 30; // 30s safety cap per utterance
+    let capture_started = Instant::now();
+    let mut heard_audio = false;
+    let mut silence_reported = false;
 
     while let Some(sample) = stream.next().await {
         buffer.push_back(sample);
@@ -202,6 +208,24 @@ async fn run_vad_capture(
             for _ in 0..config.hop_size {
                 if let Some(v) = buffer.pop_front() {
                     mono.push(v);
+                }
+            }
+
+            // macOS hands back exact digital zeros when the launching app lacks
+            // System Audio Recording permission. Until any real sound arrives,
+            // warn the UI so it can say so instead of "Listening…" forever.
+            // Pauses later in the call are normal and never trigger it.
+            if !heard_audio {
+                if mono.iter().any(|v| *v != 0.0) {
+                    heard_audio = true;
+                    if silence_reported {
+                        let _ = app.emit("system-audio-silent", false);
+                    }
+                } else if !silence_reported
+                    && capture_started.elapsed() >= SILENT_AUDIO_WARN_AFTER
+                {
+                    silence_reported = true;
+                    let _ = app.emit("system-audio-silent", true);
                 }
             }
 
