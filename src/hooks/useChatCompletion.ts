@@ -10,6 +10,9 @@ import {
   generateMessageId,
   generateRequestId,
   getResponseSettings,
+  ensureScreenRecordingPermission,
+  isScreenRecordingPermissionError,
+  SCREEN_RECORDING_PERMISSION_MESSAGE,
 } from "@/lib";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -541,36 +544,11 @@ export const useChatCompletion = (
     setIsScreenshotLoading(true);
 
     try {
-      // Check screen recording permission on macOS
-      const platform = navigator.platform.toLowerCase();
-      if (platform.includes("mac") && !hasCheckedPermissionRef.current) {
-        const {
-          checkScreenRecordingPermission,
-          requestScreenRecordingPermission,
-        } = await import("tauri-plugin-macos-permissions-api");
-
-        const hasPermission = await checkScreenRecordingPermission();
-
-        if (!hasPermission) {
-          // Request permission
-          await requestScreenRecordingPermission();
-
-          // Wait a moment and check again
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-
-          const hasPermissionNow = await checkScreenRecordingPermission();
-
-          if (!hasPermissionNow) {
-            setState((prev) => ({
-              ...prev,
-              error:
-                "Screen Recording permission required. Please enable it by going to System Settings > Privacy & Security > Screen & System Audio Recording. If you don't see Pluely in the list, click the '+' button to add it. If it's already listed, make sure it's enabled. Then restart the app.",
-            }));
-            setIsScreenshotLoading(false);
-            screenshotInitiatedByThisContext.current = false;
-            return;
-          }
-        }
+      // Request Screen Recording permission on macOS, but don't hard-fail on
+      // a false preflight — it can false-negative. Attempt the capture and let
+      // the native side report a real denial.
+      if (!hasCheckedPermissionRef.current) {
+        await ensureScreenRecordingPermission();
         hasCheckedPermissionRef.current = true;
       }
 
@@ -592,9 +570,12 @@ export const useChatCompletion = (
         await invoke("start_screen_capture");
       }
     } catch (error) {
+      console.error("[ScreenRecording] capture failed:", error);
       setState((prev) => ({
         ...prev,
-        error: "Failed to capture screenshot. Please try again.",
+        error: isScreenRecordingPermissionError(error)
+          ? SCREEN_RECORDING_PERMISSION_MESSAGE
+          : "Failed to capture screenshot. Please try again.",
       }));
       isProcessingScreenshotRef.current = false;
       screenshotInitiatedByThisContext.current = false;

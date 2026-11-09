@@ -28,6 +28,11 @@ import { QuickActions } from "./QuickActions";
 import { Warning } from "./Warning";
 import { useSystemAudioType } from "@/hooks";
 import { useApp } from "@/contexts";
+import {
+  ensureScreenRecordingPermission,
+  isScreenRecordingPermissionError,
+  SCREEN_RECORDING_PERMISSION_MESSAGE,
+} from "@/lib";
 import { cn } from "@/lib/utils";
 
 export const SystemAudio = (props: useSystemAudioType) => {
@@ -142,30 +147,18 @@ export const SystemAudio = (props: useSystemAudioType) => {
 
     setIsCapturingScreenshot(true);
     try {
-      // Check screen recording permission on macOS
-      const platform = navigator.platform.toLowerCase();
-      if (platform.includes("mac")) {
-        const {
-          checkScreenRecordingPermission,
-          requestScreenRecordingPermission,
-        } = await import("tauri-plugin-macos-permissions-api");
+      // Request permission on macOS but still attempt the capture —
+      // preflight can false-negative.
+      await ensureScreenRecordingPermission();
 
-        const hasPermission = await checkScreenRecordingPermission();
-        if (!hasPermission) {
-          await requestScreenRecordingPermission();
-          setIsCapturingScreenshot(false);
-          return;
-        }
-      }
-
-      // Capture screenshot
-      const base64: string = await invoke("capture_screenshot", {
-        screenId: null, // Use default screen
-      });
+      const base64: string = await invoke("capture_to_base64");
 
       setScreenshotImage(base64);
     } catch (err) {
-      console.error("Failed to capture screenshot:", err);
+      console.error("[ScreenRecording] capture failed:", err);
+      if (isScreenRecordingPermissionError(err)) {
+        console.error(SCREEN_RECORDING_PERMISSION_MESSAGE);
+      }
     } finally {
       setIsCapturingScreenshot(false);
     }

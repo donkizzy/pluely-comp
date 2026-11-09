@@ -8,7 +8,12 @@ use std::sync::{Arc, Mutex};
 use std::{thread, time::Duration};
 use tauri::Emitter;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+#[cfg(not(target_os = "macos"))]
 use xcap::Monitor;
+
+#[cfg(target_os = "macos")]
+#[path = "capture_macos.rs"]
+mod capture_macos;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SelectionCoords {
@@ -38,11 +43,87 @@ impl Default for CaptureState {
     }
 }
 
-#[tauri::command]
-pub async fn start_screen_capture(app: tauri::AppHandle) -> Result<(), String> {
-    // Get all monitors
-    let capture_monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
+/// One overlay to show: the captured pixels plus where to place the window.
+struct OverlayTarget {
+    image: image::RgbaImage,
+    /// Logical (point) size and position: width, height, x, y.
+    logical: (f64, f64, f64, f64),
+    is_primary: bool,
+}
 
+/// macOS: pixels come from ScreenCaptureKit; overlay placement comes from the
+/// Tauri monitor layout, matched to each captured display by its origin.
+#[cfg(target_os = "macos")]
+async fn collect_overlay_targets(app: &tauri::AppHandle) -> Result<Vec<OverlayTarget>, String> {
+    let captured =
+        tauri::async_runtime::spawn_blocking(capture_macos::capture_all_displays)
+            .await
+            .map_err(|e| format!("Task panicked: {}", e))??;
+
+    let tauri_monitors = app
+        .available_monitors()
+        .map_err(|e| format!("Failed to get monitor layout: {}", e))?;
+    let primary_pos = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| *m.position());
+
+    if tauri_monitors.len() != captured.len() {
+        eprintln!(
+            "Monitor count mismatch between capture ({}) and layout ({}); using capture frames",
+            captured.len(),
+            tauri_monitors.len()
+        );
+    }
+
+    let mut targets = Vec::with_capacity(captured.len());
+    for display in captured {
+        let (dx, dy, dw, dh) = display.frame;
+        // Find the Tauri monitor whose logical origin matches this display.
+        let matched = tauri_monitors.iter().min_by(|a, b| {
+            let dist = |m: &tauri::Monitor| {
+                let sf = m.scale_factor();
+                let px = m.position().x as f64 / sf - dx;
+                let py = m.position().y as f64 / sf - dy;
+                px * px + py * py
+            };
+            dist(a)
+                .partial_cmp(&dist(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let (logical, is_primary) = match matched {
+            Some(m) => {
+                let sf = m.scale_factor();
+                let size = m.size();
+                let pos = m.position();
+                (
+                    (
+                        size.width as f64 / sf,
+                        size.height as f64 / sf,
+                        pos.x as f64 / sf,
+                        pos.y as f64 / sf,
+                    ),
+                    primary_pos.map(|p| p == *pos).unwrap_or(false),
+                )
+            }
+            None => ((dw, dh, dx, dy), dx == 0.0 && dy == 0.0),
+        };
+
+        targets.push(OverlayTarget {
+            image: display.image,
+            logical,
+            is_primary,
+        });
+    }
+    Ok(targets)
+}
+
+/// Windows / Linux: keep the existing xcap path.
+#[cfg(not(target_os = "macos"))]
+async fn collect_overlay_targets(app: &tauri::AppHandle) -> Result<Vec<OverlayTarget>, String> {
+    let capture_monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
     if capture_monitors.is_empty() {
         return Err("No monitors found".to_string());
     }
@@ -60,26 +141,97 @@ pub async fn start_screen_capture(app: tauri::AppHandle) -> Result<(), String> {
         );
     }
 
-    let state = app.state::<CaptureState>();
-    if state.overlay_active.load(Ordering::SeqCst) {
-        // Attempt to clean up any stale overlays before proceeding
-        let _ = close_overlay_window(app.clone());
-    }
-    state.overlay_active.store(true, Ordering::SeqCst);
-    let mut captured_monitors = HashMap::new();
-
-    // Capture all monitors and store their info
+    let mut targets = Vec::with_capacity(capture_monitors.len());
     for (idx, monitor) in capture_monitors.iter().enumerate() {
-        let captured_image = monitor.capture_image().map_err(|e| {
-            state.overlay_active.store(false, Ordering::SeqCst);
-            format!("Failed to capture monitor {}: {}", idx, e)
-        })?;
+        let image = monitor
+            .capture_image()
+            .map_err(|e| format!("Failed to capture monitor {}: {}", idx, e))?;
+        if is_blank_rgba(&image) {
+            eprintln!("Capture of monitor {} appears blank", idx);
+        }
 
-        let monitor_info = MonitorInfo {
-            image: captured_image,
+        let logical = if let Some(display) = tauri_monitors.get(idx) {
+            let scale_factor = display.scale_factor();
+            let size = display.size();
+            let position = display.position();
+            // Size values are in physical pixels; convert to logical units for window placement
+            (
+                size.width as f64 / scale_factor,
+                size.height as f64 / scale_factor,
+                position.x as f64 / scale_factor,
+                position.y as f64 / scale_factor,
+            )
+        } else {
+            // Fallback to xcap monitor info if Tauri monitor data is unavailable/mismatched
+            (
+                monitor.width().map_err(|e| e.to_string())? as f64,
+                monitor.height().map_err(|e| e.to_string())? as f64,
+                monitor.x().map_err(|e| e.to_string())? as f64,
+                monitor.y().map_err(|e| e.to_string())? as f64,
+            )
         };
 
-        captured_monitors.insert(idx, monitor_info);
+        targets.push(OverlayTarget {
+            image,
+            logical,
+            is_primary: monitor.is_primary().unwrap_or(false),
+        });
+    }
+    Ok(targets)
+}
+
+/// Near-black / empty frame check for the non-macOS path.
+#[cfg(not(target_os = "macos"))]
+fn is_blank_rgba(image: &image::RgbaImage) -> bool {
+    let raw = image.as_raw();
+    let pixels = raw.len() / 4;
+    if pixels == 0 {
+        return true;
+    }
+    let step = (pixels / 10_000).max(1);
+    (0..pixels)
+        .step_by(step)
+        .all(|i| raw[i * 4 + 3] == 0 || raw[i * 4..i * 4 + 3].iter().all(|&c| c <= 8))
+}
+
+#[tauri::command]
+pub async fn start_screen_capture(app: tauri::AppHandle) -> Result<(), String> {
+    {
+        let state = app.state::<CaptureState>();
+        if state.overlay_active.load(Ordering::SeqCst) {
+            // Attempt to clean up any stale overlays before proceeding
+            let _ = close_overlay_window(app.clone());
+        }
+        state.overlay_active.store(true, Ordering::SeqCst);
+    }
+
+    let targets = match collect_overlay_targets(&app).await {
+        Ok(t) if !t.is_empty() => t,
+        Ok(_) => {
+            app.state::<CaptureState>()
+                .overlay_active
+                .store(false, Ordering::SeqCst);
+            return Err("No monitors found".to_string());
+        }
+        Err(e) => {
+            app.state::<CaptureState>()
+                .overlay_active
+                .store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
+
+    let state = app.state::<CaptureState>();
+    let mut captured_monitors = HashMap::new();
+    let mut overlay_layout = Vec::with_capacity(targets.len());
+    for (idx, target) in targets.into_iter().enumerate() {
+        overlay_layout.push((target.logical, target.is_primary));
+        captured_monitors.insert(
+            idx,
+            MonitorInfo {
+                image: target.image,
+            },
+        );
     }
 
     // Store all captured monitors
@@ -93,30 +245,9 @@ pub async fn start_screen_capture(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     // Create overlay windows for all monitors
-    for (idx, monitor) in capture_monitors.iter().enumerate() {
-        let (logical_width, logical_height, logical_x, logical_y) =
-            if let Some(display) = tauri_monitors.get(idx) {
-                let scale_factor = display.scale_factor();
-                let size = display.size();
-                let position = display.position();
-
-                // Size values are in physical pixels; convert to logical units for window placement
-                let width = size.width as f64 / scale_factor;
-                let height = size.height as f64 / scale_factor;
-                let x = position.x as f64 / scale_factor;
-                let y = position.y as f64 / scale_factor;
-
-                (width, height, x, y)
-            } else {
-                // Fallback to xcap monitor info if Tauri monitor data is unavailable/mismatched
-                (
-                    monitor.width().map_err(|e| e.to_string())? as f64,
-                    monitor.height().map_err(|e| e.to_string())? as f64,
-                    monitor.x().map_err(|e| e.to_string())? as f64,
-                    monitor.y().map_err(|e| e.to_string())? as f64,
-                )
-            };
-
+    for (idx, ((logical_width, logical_height, logical_x, logical_y), is_primary)) in
+        overlay_layout.iter().copied().enumerate()
+    {
         let window_label = format!("capture-overlay-{}", idx);
 
         let overlay =
@@ -147,7 +278,7 @@ pub async fn start_screen_capture(app: tauri::AppHandle) -> Result<(), String> {
         overlay.show().ok();
         overlay.set_always_on_top(true).ok();
 
-        if monitor.is_primary().unwrap_or(false) {
+        if is_primary {
             overlay.set_focus().ok();
             overlay
                 .request_user_attention(Some(tauri::UserAttentionType::Critical))
@@ -158,8 +289,8 @@ pub async fn start_screen_capture(app: tauri::AppHandle) -> Result<(), String> {
     // Give a moment for all windows to settle, then focus primary again
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    for (idx, monitor) in capture_monitors.iter().enumerate() {
-        if monitor.is_primary().unwrap_or(false) {
+    for (idx, (_, is_primary)) in overlay_layout.iter().enumerate() {
+        if *is_primary {
             let window_label = format!("capture-overlay-{}", idx);
             if let Some(window) = app.get_webview_window(&window_label) {
                 window.set_focus().ok();
@@ -261,6 +392,31 @@ pub async fn capture_selected_area(
     Ok(base64_str)
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, String> {
+    // Window geometry in global points, to pick the display it sits on.
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let window_rect = match (window.outer_position(), window.outer_size()) {
+        (Ok(pos), Ok(size)) => Some((
+            pos.x as f64 / scale,
+            pos.y as f64 / scale,
+            size.width as f64 / scale,
+            size.height as f64 / scale,
+        )),
+        _ => None,
+    };
+
+    let png = tauri::async_runtime::spawn_blocking(move || {
+        capture_macos::capture_best_display_png(window_rect)
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))??;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(png))
+}
+
+#[cfg(not(target_os = "macos"))]
 #[tauri::command]
 pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, String> {
     let monitor_fallback = window
@@ -381,6 +537,9 @@ pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, S
         let image = monitor
             .capture_image()
             .map_err(|e| format!("Failed to capture image: {}", e))?;
+        if is_blank_rgba(&image) {
+            eprintln!("Full-screen capture appears blank");
+        }
         let mut png_buffer = Vec::new();
         PngEncoder::new(&mut png_buffer)
             .write_image(
